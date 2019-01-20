@@ -12,7 +12,7 @@ use IpBan;
 use IpBan::Config;
 use Log;
 
-my $AUTHFILE_READ_FREQUENCY = 4; # seconds
+my $AUTHFILE_READ_FREQUENCY = 5; # seconds
 
 my $conf = my $log = my $debug = 0;
 GetOptions(
@@ -26,11 +26,9 @@ my $ipc = IpBan::Config->new($conf, $log, $debug);
 my @Services = $ipc->parse();
 
 my $Log = Log->open(logfile=>$ipc->logfile(), flushlog=>1);
-
 END {
     $Log->close() if $Log;
 }
-
 
 # Signal handling
 $SIG{INT}  = \&killhandler;
@@ -42,12 +40,27 @@ sub killhandler {
 }
 sub huphandler {
     $Log->info("Caught -HUP, reloading config..");
+    # TODO
     $Log->info("config NOT IMPLEMENTED YET");
 }
 
 
 #
-# Vars
+# Main
+
+# initial info logging
+if (@Services) {
+    $Log->info("Configured services");
+    $Log->info("===================");
+    for my $s (@Services) {
+        $Log->info("Service: ", $s->getname());
+        $Log->info("Proto: ", $s->getproto());
+        $Log->info("Port: ", $s->getport());
+        $Log->info("Banfilter: ", $s->getbanfilter());
+        $Log->info("Bantime: ", $s->getbantime());
+        $Log->info("Whitelist: ", join ', ', $s->getwhitelist());
+    }
+}
 
 my $ipban = IpBan->new($Log);
 
@@ -172,6 +185,11 @@ while (1) {
     sleep $AUTHFILE_READ_FREQUENCY;
 }
 
+
+#
+# Subs
+
+# remove this eventually!
 sub __get_logchunk {
     return (
 'Nov 20 21:23:01 loubi sshd[21004]: pam_unix(sshd:auth): check pass; user unknown',
@@ -289,79 +307,6 @@ sub __get_logchunk {
 'Nov 20 21:30:06 loubi sshd[21062]: PAM 2 more authentication failures; logname= uid=0 euid=0 tty=ssh ruser= rhost=116.31.116.48  user=root',
 );
 }
-
-
-#
-# Subs
-
-=head
-
-# see bottom of this file for sample logs
-sub process_logfile_chunk {
-    my @lines = @_;
-
-    my $now = time;
-    for my $line (@lines) {
-        next unless $line =~ /sshd\[/;
-
-        if ($line =~ /Failed password/) {
-            my ($ip) = $line =~ /from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) port /;
-            $ip .= "/32";
-
-            $LOGIN{$ip}{count}++;
-            $LOGIN{$ip}{countstart} = $now
-                unless defined $LOGIN{$ip}{countstart};
-        }
-        #
-        # add more (possible) bans here
-        #
-    }
-
-#print Dumper \%LOGIN;
-    my $l = join "\n", map { " =# $_ / $LOGIN{$_}{count} / $LOGIN{$_}{countstart}" } keys %LOGIN;
-    $Log->info("Current logins status:\n$l") if $l;
-
-    # ban/unban
-    for my $ip (keys %LOGIN) {
-        my $countstart = $LOGIN{$ip}{countstart};
-
-        if (($now - $countstart) >= $THRESHOLD{timespan}) {
-            if ($LOGIN{$ip}{count} < $THRESHOLD{maxattempt}) {
-                # if not crossed threshold for logins
-                # just reset our counters and move on..
-                delete $LOGIN{$ip};
-                next;
-            }
-
-            # BAN!
-
-            $ipban->ban($ip, 'tcp', 22);
-            #my $ban = "iptables -I INPUT 1 -p tcp -s $ip -d 0/0 --dport 22 -j REJECT -m comment --comment 'limit SSH access'";
-            #my $banres = join "", qx($ban 2>&1);
-            #$Log->info("Banning IP $ip ($ban)");
-            #$Log->warn($banres) if $banres;
-            #$BAN{$ip} = $now;
-            #delete $LOGIN{$ip};
-        }
-    }
-
-    # UN-BAN!
-    for my $ip (keys %BAN) {
-        if (($now - $BAN{$ip}) >= $THRESHOLD{timeban}) {
-            my $unban = "iptables -D INPUT -p tcp -s $ip -d 0/0 --dport 22 -j REJECT";
-            my $unbanres = join "", qx($unban 2>&1);
-            $Log->info("Un-banning IP $ip ($unban)");
-            $Log->warn($unbanres) if $unbanres;
-            delete $BAN{$ip};
-        }
-    }
-
-#print Dumper \%BAN;
-    my $b = join "\n", map { " =X $_ / $BAN{$_}" } keys %BAN;
-    $Log->info("Current banned:\n$b") if $b;
-}
-
-=cut
 
 sub usage {
     my $exit = 0;
