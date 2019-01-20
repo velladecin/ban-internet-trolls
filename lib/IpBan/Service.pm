@@ -72,6 +72,15 @@ sub __init {
     die "Banfilter must be in format 'int/int' (connection attempts/time period [seconds])" unless $banfilter =~ m|^\d+/\d+$|;
     $self->{banfilter} = $banfilter;
 
+    # whitelisting
+    my @whitelist = ();
+    if ($args{whitelist} and length $args{whitelist}) {
+        # IPs
+        $args{whitelist} =~ s/\s//g;
+        @whitelist = split /,/, $args{whitelist};
+    }
+    $self->{whitelist} = \@whitelist;
+
     1;
 }
 
@@ -84,6 +93,7 @@ sub getbantime   { return $_[0]->{bantime}   }
 sub getbanfilter { return $_[0]->{banfilter} }
 sub getauthlog   { return $_[0]->{authlog}   }
 sub getauthlogsearch { return $_[0]->{authlogsearch} }
+sub getwhitelist { return wantarray ? @{$_[0]->{whitelist}} : $_[0]->{whitelist} }
 
 
 1;
