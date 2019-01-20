@@ -65,7 +65,7 @@ sub new {
 sub __init {
     my $self = shift;
 
-    $self->{log}->info("Collecting currently banned IPs from netfilter");
+    $self->{log}->info("Collecting currently banned IPs (from netfilter)");
 
     # -A INPUT -s 116.31.116.49/32 -p tcp -m tcp --dport 22 -m comment --comment "<$IPBANID>" -j REJECT --reject-with icmp-port-unreachable
     my %ban4;
@@ -85,11 +85,9 @@ sub __init {
 
         # as we cannot say when this IP was banned,
         # just make it now..
-        $ban4{"$proto:$port"} = {
-            $ip => {
-                start => $now,
-                lastseen => $now,
-            },
+        $ban4{"$proto:$port"}{$ip} = {
+            start => $now,
+            lastseen => $now,
         }
     }
 
@@ -212,6 +210,8 @@ print Dumper $self;
         # banned
         my $bbase = $self->{$ipver}{banned}{$sid};
         for my $ip (keys %$bbase) {
+            # check whitelist first
+
             # if currently banned and still trolls (lastseen within the designated 'bantime', see config for details)
             # then take no action (ban continues), othewise un-ban that IP
             my $tdelta = $now - $bbase->{$ip}{lastseen};
@@ -245,6 +245,8 @@ print Dumper $self;
 
         my $cbase = $self->{$ipver}{candidate}{$sid};
         for my $ip (keys %$cbase) {
+            # check whitelist first
+
             # 1. if count satisfies banfilter (see config for details) then remove this candidate, move her/him to banned and physically ban them,
             #   check count irrespective of time, any candidate entry should never be more than banfilter time + read_authfile_frequency old
             if ($cbase->{$ip}{count} >= $maxcount) {
