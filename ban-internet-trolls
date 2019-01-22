@@ -173,7 +173,13 @@ while (1) {
                 next;
             }
 
-            # ingest auth fails
+            # exclude whitelisted IPs
+            if (grep /^${v}$/, $s->getwhitelist()) {
+                $ipban->{log}->info("Ignoring whitelisted IP: $v");
+                next;
+            }
+
+            # ingest failed auth attempts
             $ipban->ingest4($v, $c, $s->getid()) if $k eq 'ip4';
             $ipban->ingest6($v, $c, $s->getid()) if $k eq 'ip6';
         }
