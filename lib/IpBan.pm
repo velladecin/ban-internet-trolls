@@ -161,8 +161,8 @@ sub __get_banned {
     my ($self, $type) = @_;
 
     my %return;
-    @return{keys %{$self->{ip4}{banned}}} = values %{$self->{ip4}{banned}} if $type =~ /4/;
-    @return{keys %{$self->{ip6}{banned}}} = values %{$self->{ip6}{banned}} if $type =~ /6/;
+    @return{keys %{$self->{ip4}{banned}}} = values %{$self->{ip4}{banned}} if $type =~ /^4$/;
+    @return{keys %{$self->{ip6}{banned}}} = values %{$self->{ip6}{banned}} if $type =~ /^6$/;
 
     return %return;
 }
@@ -210,8 +210,6 @@ print Dumper $self;
         # banned
         my $bbase = $self->{$ipver}{banned}{$sid};
         for my $ip (keys %$bbase) {
-            # check whitelist first
-
             # if currently banned and still trolls (lastseen within the designated 'bantime', see config for details)
             # then take no action (ban continues), othewise un-ban that IP
             my $tdelta = $now - $bbase->{$ip}{lastseen};
@@ -245,12 +243,10 @@ print Dumper $self;
 
         my $cbase = $self->{$ipver}{candidate}{$sid};
         for my $ip (keys %$cbase) {
-            # check whitelist first
-
             # 1. if count satisfies banfilter (see config for details) then remove this candidate, move her/him to banned and physically ban them,
             #   check count irrespective of time, any candidate entry should never be more than banfilter time + read_authfile_frequency old
             if ($cbase->{$ip}{count} >= $maxcount) {
-                $self->{log}->info("!!! Banning: $ip, $sid");
+                $self->{log}->info("!!! Banning: $ip, $sid, total count: ", $cbase->{$ip}{count});
 #print "!!! Banning: $ip, $sid\n";
                 # add to banned
                 $self->{$ipver}{banned}{$sid}{$ip} = {
