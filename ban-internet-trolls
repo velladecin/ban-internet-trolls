@@ -22,10 +22,8 @@ GetOptions(
     "debug+" => \$debug,
 ) or die usage();
 
-my $ipc = IpBan::Config->new($conf, $log, $debug);
-my @Services = $ipc->parse();
+my ($Log, $Ipban, @Services) = __init($conf, $log, $debug);
 
-my $Log = Log->open(logfile=>$ipc->logfile(), flushlog=>1);
 END {
     $Log->close() if $Log;
 }
@@ -40,29 +38,12 @@ sub killhandler {
 }
 sub huphandler {
     $Log->info("Caught -HUP, reloading config..");
-    # TODO
-    $Log->info("config NOT IMPLEMENTED YET");
+    ($Log, $Ipban, @Services) = __init();
 }
 
 
 #
 # Main
-
-# initial info logging
-if (@Services) {
-    $Log->info("Configured services");
-    $Log->info("===================");
-    for my $s (@Services) {
-        $Log->info("Service: ", $s->getname());
-        $Log->info("Proto: ", $s->getproto());
-        $Log->info("Port: ", $s->getport());
-        $Log->info("Banfilter: ", $s->getbanfilter());
-        $Log->info("Bantime: ", $s->getbantime());
-        $Log->info("Whitelist: ", join ', ', $s->getwhitelist());
-    }
-}
-
-my $ipban = IpBan->new($Log);
 
 my %pos;
 while (1) {
@@ -175,25 +156,53 @@ while (1) {
 
             # exclude whitelisted IPs
             if (grep /^${v}$/, $s->getwhitelist()) {
-                $ipban->{log}->info("Ignoring whitelisted IP: $v");
+                $Ipban->{log}->info("Ignoring whitelisted IP: $v");
                 next;
             }
 
             # ingest failed auth attempts
-            $ipban->ingest4($v, $c, $s->getid()) if $k eq 'ip4';
-            $ipban->ingest6($v, $c, $s->getid()) if $k eq 'ip6';
+            $Ipban->ingest4($v, $c, $s->getid()) if $k eq 'ip4';
+            $Ipban->ingest6($v, $c, $s->getid()) if $k eq 'ip6';
         }
 
         # ban/unban
-        $ipban->enforce($s);
+        $Ipban->enforce($s);
     }
 
     sleep $AUTHFILE_READ_FREQUENCY;
 }
 
 
+
 #
 # Subs
+
+sub __init {
+    my ($conf, $log, $debug) = @_;
+
+    my $ipc = IpBan::Config->new($conf, $log, $debug);
+    my @services = $ipc->parse();
+
+    my $logger = Log->open(logfile=>$ipc->logfile(), flushlog=>1);
+
+    # start/reload info logging
+    if (@services) {
+        $logger->info("Configured services");
+        $logger->info("===================");
+        for my $s (@services) {
+            $logger->info("Service: ", $s->getname());
+            $logger->info("Proto: ", $s->getproto());
+            $logger->info("Port: ", $s->getport());
+            $logger->info("Banfilter: ", $s->getbanfilter());
+            $logger->info("Bantime: ", $s->getbantime());
+            $logger->info("Whitelist: ", join ', ', $s->getwhitelist());
+        }
+    }
+
+    my $ipban = IpBan->new($logger);
+
+    return $logger, $ipban, @services;
+}
 
 # remove this eventually!
 sub __get_logchunk {
