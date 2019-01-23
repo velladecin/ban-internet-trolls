@@ -8,11 +8,6 @@ use Log;
 
 my $IPT4 = '/sbin/iptables';
 my $IPT6 = '/sbin/ip6tables';
-my %SERVICE = (
-    ssh     => {proto=>'tcp', port=>22},
-    rsync   => {proto=>'tcp', port=>873},
-    # add more here
-);
 my $IPBANID = 'IPBANxkeivFHio5qdiIHFi3nf';
 
 =head1 NAME
@@ -21,20 +16,20 @@ IpBan - will ban IPs, via iptables
 
 =head1 SYNOPSIS
 
-    my $ib = IpBan->new(logfile=>'/path/to/file', ipver=>'ip4|ip6|ip4+ip6');
+    my $ib = IpBan->new(Log);
 
 =over 8
 
-B<logfile> - if not given no logging will take place
-
-B<ipver> - one of ip4, ip6, ip4+ip6. Defaults to ip4.
-
-B<commentstring> - for easy filtering of iptables rules and is required. It should be reasonably descriptive and reasonably unique.
+B<Log> - object of Log instance (see lib)
+         You can create your own Log as long as it implements
+         info, warn, crit methods
 
 =back
 
-    $ib->ban4('1.1.1.1');
-    $ib->unban4('1.1.1.1');
+    $ib->ingest4(1.1.1.1, count, sid);
+    $ib->ingest6(a:b:c:d:e:f:1:2, count, sid);
+
+    $ib->enforce(service);
 
 =cut
 
@@ -42,7 +37,7 @@ B<commentstring> - for easy filtering of iptables rules and is required. It shou
 
 =over 8
 
-=item C<new()>
+=item C<new(Log)>
 
 See SYNOPSIS
 
@@ -95,45 +90,20 @@ sub __init {
         unless keys %ban4;
 
     # TODO ipv6
-=head
-    my %ban6;
-    for my $line (grep /$IPBANID/, qx($IPT6 -S INPUT)) {
-        chomp $line;
-
-        my ($ip, $proto, $port) = $line =~ m||;
-
-        print ">>> $line\n";
-    }
-
-    $self->{log}->info("IPv6: None")
-        unless keys %ban6;
-=cut
+#    my %ban6;
+#    for my $line (grep /$IPBANID/, qx($IPT6 -S INPUT)) {
+#        chomp $line;
+#
+#        my ($ip, $proto, $port) = $line =~ m||;
+#
+#        print ">>> $line\n";
+#    }
+#
+#    $self->{log}->info("IPv6: None")
+#        unless keys %ban6;
 
     $self->{ip4}{banned} = \%ban4;
     $self->{ip6}{banned} = \%ban6;
-}
-
-=over 8
-
-=item C<ban4(ip)>
-
-=item C<unban4(ip)>
-
-=item C<ban6>
-
-=item C<unban6>
-
-=back
-
-=cut
-
-sub ban4 {
-    my ($self, $ip) = @_;
-    return unless $ip =~ m|^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(/32)?$|;
-}
-
-sub unban4 {
-    my ($self, $ip) = @_;
 }
 
 =over 8
@@ -160,12 +130,29 @@ sub get_banned  { __get_banned(shift, '46'); }
 sub __get_banned {
     my ($self, $type) = @_;
 
+    # TODO fix this -> ip4}{banned}{..} structure has changed
+
     my %return;
     @return{keys %{$self->{ip4}{banned}}} = values %{$self->{ip4}{banned}} if $type =~ /^4$/;
     @return{keys %{$self->{ip6}{banned}}} = values %{$self->{ip6}{banned}} if $type =~ /^6$/;
 
     return %return;
 }
+
+=over 8
+
+=item C<ingest4(ip, count, sid)>
+
+ingest IPv4 IP together with count (of failed logins) and service id (proto:port)
+
+
+=item C<ingest6(ip, count, sid)>
+
+ingest IPv6 IP together with count (of failed logins) and service id (proto:port)
+
+=back
+
+=cut
 
 sub ingest4 { __ingest(shift, 'ip4', @_); }
 sub ingest6 { __ingest(shift, 'ip6', @_); }
@@ -226,7 +213,6 @@ print Dumper $self;
             # the only possible action here is to UN-ban
             if ($tdelta > $service->getbantime()) {
                 $self->{log}->info("*** UN-banning: $ip, $sid");
-#print "*** UN-banning: $ip, $sid\n";
                 delete $bbase->{$ip};
 
                 # physically un-ban
@@ -247,7 +233,6 @@ print Dumper $self;
             #   check count irrespective of time, any candidate entry should never be more than banfilter time + read_authfile_frequency old
             if ($cbase->{$ip}{count} >= $maxcount) {
                 $self->{log}->info("!!! Banning: $ip, $sid, total count: ", $cbase->{$ip}{count});
-#print "!!! Banning: $ip, $sid\n";
                 # add to banned
                 $self->{$ipver}{banned}{$sid}{$ip} = {
                     start => $now,
