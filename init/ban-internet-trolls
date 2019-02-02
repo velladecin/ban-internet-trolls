@@ -1,7 +1,4 @@
 #!/bin/sh
-# Description:	Debian GNU/Linux 9.6 (stretch)
-
-# TODO - move pid 'assurance' haha to getpid()
 
 BIT_DAEMON=/usr/local/sbin/ban-internet-trollsd
 BIT_DAEMON_NAME=${BIT_DAEMON##*/}
@@ -10,16 +7,22 @@ BIT_PIDFILE=/var/run/bit.pid
 . /lib/lsb/init-functions
 
 getpid() {
-    local pid=`pgrep -f $BIT_DAEMON_NAME`
+    #local pid=`pgrep -f $BIT_DAEMON_NAME`
+    local pid=`pgrep -f $BIT_DAEMON`
+
+    if [ "x$pid" = "x" ]; then
+        pid=0
+    fi
+
     return $pid
 }
 
 daemon_up() {
     getpid
     local pid=$?
-    local retval=1 # let's be some negative ;)
+    local retval=1
 
-    if [ "x$pid" != "x" ]; then
+    if [ $pid -gt 0 ]; then
         retval=0
     fi
 
