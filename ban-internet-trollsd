@@ -2,7 +2,6 @@
 use strict;
 use warnings;
 use Fcntl qw(SEEK_SET SEEK_END);
-use POSIX qw(strftime);
 use Data::Dumper;
 use FindBin;
 use Getopt::Long;
@@ -48,6 +47,9 @@ sub huphandler {
 
 my %pos;
 while (1) {
+    # reconcile on each run (is this too much?)
+    $Ipban->reconcile();
+
     for my $s (@Services) {
         # What we're doing here is:
         # 1. %pos is copied to the child as it is at this very moment - empty on first run, updated after that

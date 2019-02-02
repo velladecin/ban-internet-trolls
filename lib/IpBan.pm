@@ -226,16 +226,8 @@ sub enforce {
             };
 
             # physically ban
-            # TODO - needs to unify this with banning below
             my $ipt = $ipver =~ /4/ ? $IPT4 : $IPT6;
             __ban($ipt, $service->getproto(), $ip, $service->getport());
-=head
-            my $ban = sprintf '%s -I INPUT 1 %s', # full iptables rule
-                $ipver =~ /4/ ? $IPT4 : $IPT6,
-                sprintf('-p %s -s %s --dport %d -m comment --comment %s -j REJECT', $service->getproto(), $ip, $service->getport(), $IPBANID);
-
-            qx($ban);
-=cut
 
             DELETE_FROM_GRACE:
             delete $gbase->{$ip};
@@ -295,13 +287,7 @@ sub enforce {
                 # physically ban
                 my $ipt = $ipver =~ /4/ ? $IPT4 : $IPT6;
                 __ban($ipt, $service->getproto(), $ip, $service->getport());
-=head
-                my $ban = sprintf '%s -I INPUT 1 %s', # full iptables rule
-                    $ipver =~ /4/ ? $IPT4 : $IPT6,
-                    sprintf('-p %s -s %s --dport %d -m comment --comment %s -j REJECT', $service->getproto(), $ip, $service->getport(), $IPBANID);
 
-                qx($ban);
-=cut
                 next;
             }
 
@@ -319,6 +305,64 @@ sub enforce {
             next;
         }
     }
+}
+
+sub reconcile {
+    my $self = shift;
+    #-A INPUT -s 129.213.119.45/32 -p tcp -m tcp --dport 22 -m comment --comment IPBANxkeivFHio5qdiIHFi3nf -j REJECT --reject-with icmp-port-unreachable
+
+    my %rules;
+    my $rulecount = 0;
+    for my $rule (qx($IPT4 -S INPUT | grep $IPBANID)) {
+        my ($ip, $proto, $port, $action) =
+            $rule =~ m|-A INPUT -s (\d+\.\d+\.\d+\.\d+/32) -p (\w+) .* --dport (\d+) .* -j ([A-Z]+).*$|; 
+
+        unless ($ip and $proto and $port and $action) {
+            $self->lcrit("Could not retrieve all values from iptables for reconciliation: ip:$ip, proto:$proto, port:$port, action:$action");
+            next;
+        }
+
+        my $sid = "$proto:$port";
+        $rules{$sid}{$ip} = 1;
+        $rulecount++;
+    }
+
+    $self->ldebug("Reconciling: $rulecount rules,", scalar(keys %rules), "sid");
+
+    # Run thru what we have, look it up in $self and reconcile each entry
+    my $bbase = $self->{ip4}{banned};
+    my $now = time();
+    for my $sid (keys %rules) {
+        for my $ip (keys %{$rules{$sid}}) {
+            if ($bbase->{$sid}{$ip}) {
+                $bbase->{$sid}{$ip}{reconciled} = 1
+            }
+            else {
+                $bbase->{$sid}{$ip} = {
+                    start => $now,
+                    lastseen => $now,
+                    reconciled => 1,
+                };
+            }
+        }
+    }
+
+    # Run thru self and remove anything that's not reconciled
+    for my $sid (keys %$bbase) {
+        for my $ip (keys %{$bbase->{$sid}}) {
+            unless ($bbase->{$sid}{$ip}{reconciled}) {
+                # TODO - input to bantime-grace
+                $self->lwarn("Removing banned entry due to reconciliation: $sid/$ip");
+                delete $bbase->{$sid}{$ip};
+                next;
+            }
+
+            # remove the flag!
+            delete $bbase->{$sid}{$ip}{reconciled};
+        }
+    }
+
+    1;
 }
 
 #
