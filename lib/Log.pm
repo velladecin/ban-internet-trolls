@@ -10,7 +10,7 @@ Log - global logging for this project
 =head1 SYNOPSIS
 
     use Log;
-    my $l = Log->open(logfile=>'/path/to/file', flushlog=>0|1);
+    my $l = Log->open(logfile=>'/path/to/file', debug=>0|1, flushlog=>0|1);
 
 =over 8
 
@@ -23,6 +23,7 @@ flushlog defaults to B<0> (don't flush)
     $l->info("info msg");
     $l->warn("warning msg");
     $l->crit("critical msg");
+    $l->debug("debug msg");
 
 =head2 Methods
 
@@ -44,10 +45,11 @@ sub open {
     my $class = shift;
     my %self = @_;
 
-    die "Must give 'logfile' value"
+    die "Must give 'logfile' argument to ". __PACKAGE__
         unless $self{logfile};
 
     $self{flushlog} ||= 0;
+    $self{debug} ||= 0;
 
     open $self{_logfh}, '>>', $self{logfile}
         or die "Cannot open file '$self{logfile}', $!";
@@ -79,6 +81,10 @@ Also see B<flushlog> in SYNOPSIS
 
 Inputs CRITICAL level together with date+time message in designated log file
 
+=item C<debug>
+
+Input DEBUG level together with date+time message in designated log file
+
 Also see B<flushlog> in SYNOPSIS
 
 =back
@@ -88,6 +94,12 @@ Also see B<flushlog> in SYNOPSIS
 sub info { _log(shift, 'INFO',      @_) }
 sub warn { _log(shift, 'WARNING',   @_) }
 sub crit { _log(shift, 'CRITICAL',  @_) }
+sub debug {
+    my ($self, @msg) = @_;
+
+    _log($self, 'DEBUG', @msg)
+        if $self->{debug};
+}
 
 sub _log {
     my ($self, $level, @msg) = @_;
@@ -108,5 +120,7 @@ sub _log {
         select($oldfh);
     }
 }
+
+sub is_debug { return $_[0]->{debug}; }
 
 1;

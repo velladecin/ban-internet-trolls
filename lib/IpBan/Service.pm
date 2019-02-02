@@ -21,8 +21,9 @@ IpBan::Service - abstract class for a 'service'
 my %DEFAULT = (
     proto   => 'tcp',
     ipver   => 'ip4',
-    bantime => 300,      # seconds
-    banfilter => '5/60', # 5 connection attempts withing 60 seconds
+    bantime => 300,         # seconds
+    'bantime-grace' => 60,  # seconds
+    banfilter => '5/60',    # 5 connection attempts withing 60 seconds
 );
 
 sub __init {
@@ -64,8 +65,13 @@ sub __init {
 
     # bantime
     my $bantime = $args{bantime} || $DEFAULT{bantime};
-    die "Bantime must be number (of seconds)" unless $bantime =~ /^\d+$/;
+    __die_ifnotint($bantime, "Bantime must be a number");
     $self->{bantime} = $bantime;
+
+    # bantime-grace
+    my $bantimegrace = $args{'bantime-grace'} || $DEFAULT{'bantime-grace'};
+    __die_ifnotint($bantimegrace, "Bantime-grace must be a number");
+    $self->{'bantime-grace'} = $bantimegrace;
 
     # banfilter
     my $banfilter = $args{banfilter} || $DEFAULT{banfilter};
@@ -90,10 +96,20 @@ sub getport      { return $_[0]->{port}      }
 sub getproto     { return $_[0]->{proto}     }
 sub getipver     { return wantarray ? split(',', $_[0]->{ipver}) : $_[0]->{ipver} }
 sub getbantime   { return $_[0]->{bantime}   }
+sub getbantimegrace { return $_[0]->{'bantime-grace'} }
 sub getbanfilter { return $_[0]->{banfilter} }
 sub getauthlog   { return $_[0]->{authlog}   }
 sub getauthlogsearch { return $_[0]->{authlogsearch} }
 sub getwhitelist { return wantarray ? @{$_[0]->{whitelist}} : $_[0]->{whitelist} }
+
+
+#
+# Private
+
+sub __die_ifnotint {
+    my ($val, $msg) = shift;
+    die $msg unless $val =~ /^\d+$/;
+}
 
 
 1;

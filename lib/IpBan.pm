@@ -168,15 +168,20 @@ sub __ingest {
     $ip = "$ip/32" if $ipver =~ /4/;
     
     my $now = time();
-    if ($self->{$ipver}{banned}{$sid}{$ip}) {
-        $self->{$ipver}{banned}{$sid}{$ip}{lastseen} = $now;
+    my $gbase = $self->{$ipver}{grace};
+    my $cbase = $self->{$ipver}{candidate};
+    # don't do anything with 'banned',
+    # they should not show up here at all - they're currently banned
+
+    if (keys %$gbase && $gbase->{$sid}{$ip}) {
+        $gbase->{$sid}{$ip}{lastseen} = $now;
     }
-    elsif ($self->{$ipver}{candidate}{$sid}{$ip}) {
-        $self->{$ipver}{candidate}{$sid}{$ip}{count} += $count;
-        $self->{$ipver}{candidate}{$sid}{$ip}{lastseen} = $now;
+    elsif (keys %$cbase && $cbase->{$sid}{$ip}) {
+        $cbase->{$sid}{$ip}{count} += $count;
+        $cbase->{$sid}{$ip}{lastseen} = $now;
     }
     else {
-        $self->{$ipver}{candidate}{$sid}{$ip} = {
+        $cbase->{$sid}{$ip} = {
             start => $now,
             count => $count,
             lastseen => $now,
@@ -188,12 +193,54 @@ sub __ingest {
 
 sub enforce {
     my ($self, $service) = @_;
-print Dumper $self;
+
+    print Dumper $self
+        if $self->_debug();
 
     my $sid = $service->getid();
     my $now = time();
 
     for my $ipver ($service->getipver()) {
+        # grace-time
+        my $gbase = $self->{$ipver}{grace}{$sid};
+        for my $ip (keys %$gbase) {
+            unless ($gbase->{$ip}{lastseen}) {
+                my $gdelta = $now - $gbase->{$ip}{start};
+                # ban grace time expired,
+                # this fully 'un-bans' a user
+                if ($gdelta > $service->getbantimegrace()) {
+                    $self->linfo("^^^ Removing from bantime-grace pool: $ip, $sid");
+                    goto DELETE_FROM_GRACE;
+                }
+
+                next;
+            }
+
+            # ban her again..
+            my $gdelta = $gbase->{$ip}{lastseen} - $gbase->{$ip}{start};
+
+            $self->linfo("!!! Banning: $ip, $sid, breached bantime-grace in ${gdelta}s");
+            $self->{$ipver}{banned}{$sid}{$ip} = {
+                start => $now,
+                lastseen => $now,
+            };
+
+            # physically ban
+            # TODO - needs to unify this with banning below
+            my $ipt = $ipver =~ /4/ ? $IPT4 : $IPT6;
+            __ban($ipt, $service->getproto(), $ip, $service->getport());
+=head
+            my $ban = sprintf '%s -I INPUT 1 %s', # full iptables rule
+                $ipver =~ /4/ ? $IPT4 : $IPT6,
+                sprintf('-p %s -s %s --dport %d -m comment --comment %s -j REJECT', $service->getproto(), $ip, $service->getport(), $IPBANID);
+
+            qx($ban);
+=cut
+
+            DELETE_FROM_GRACE:
+            delete $gbase->{$ip};
+        }
+
         # banned
         my $bbase = $self->{$ipver}{banned}{$sid};
         for my $ip (keys %$bbase) {
@@ -204,7 +251,7 @@ print Dumper $self;
             # tdelta can be negative - daylight saving
             # in this case update lastseen to now and move on
             if ($tdelta < 0) {
-                $self->{log}->warn("Negative time delta($tdelta) for banned IP($ip), re-setting lastseen to now($now) and moving on");
+                $self->lwarn("Negative time delta($tdelta) for banned IP($ip), re-setting lastseen to now($now) and moving on");
                 $bbase->{$ip}{lastseen} = $now;
                 next;
             }
@@ -212,8 +259,11 @@ print Dumper $self;
             # lastseen timestamp is updated during ingest (above)
             # the only possible action here is to UN-ban
             if ($tdelta > $service->getbantime()) {
-                $self->{log}->info("*** UN-banning: $ip, $sid");
+                $self->linfo("*** UN-banning: $ip, $sid (entering bantime-grace: ", $service->getbantimegrace(). "s)");
                 delete $bbase->{$ip};
+
+                # add to grace-time
+                $self->{$ipver}{grace}{$sid}{$ip} = { start => $now }; 
 
                 # physically un-ban
                 my $unban = sprintf '%s -D INPUT %s', # full iptables rule
@@ -232,7 +282,7 @@ print Dumper $self;
             # 1. if count satisfies banfilter (see config for details) then remove this candidate, move her/him to banned and physically ban them,
             #   check count irrespective of time, any candidate entry should never be more than banfilter time + read_authfile_frequency old
             if ($cbase->{$ip}{count} >= $maxcount) {
-                $self->{log}->info("!!! Banning: $ip, $sid, total count: ", $cbase->{$ip}{count});
+                $self->linfo("!!! Banning: $ip, $sid, total count: ", $cbase->{$ip}{count});
                 # add to banned
                 $self->{$ipver}{banned}{$sid}{$ip} = {
                     start => $now,
@@ -243,11 +293,15 @@ print Dumper $self;
                 delete $cbase->{$ip};
 
                 # physically ban
+                my $ipt = $ipver =~ /4/ ? $IPT4 : $IPT6;
+                __ban($ipt, $service->getproto(), $ip, $service->getport());
+=head
                 my $ban = sprintf '%s -I INPUT 1 %s', # full iptables rule
                     $ipver =~ /4/ ? $IPT4 : $IPT6,
                     sprintf('-p %s -s %s --dport %d -m comment --comment %s -j REJECT', $service->getproto(), $ip, $service->getport(), $IPBANID);
 
                 qx($ban);
+=cut
                 next;
             }
 
@@ -256,7 +310,7 @@ print Dumper $self;
             # 2. if count does not satisfy banfilter and time is exceeded
             #   then remove from candidates (restart counts)
             if ($tdelta > $secs) {
-                $self->{log}->info("Removing candidate $ip, total count: ", $cbase->{$ip}{count});
+                $self->linfo("Removing candidate $ip, total count: ", $cbase->{$ip}{count});
                 delete $cbase->{$ip};
             }
 
@@ -265,6 +319,56 @@ print Dumper $self;
             next;
         }
     }
+}
+
+#
+# Logging
+
+sub lclose {
+    my $self = shift;
+    $self->{log}->close();
+}
+
+sub linfo {
+    my ($self, @msg) = @_;
+    $self->{log}->info(@msg)
+        if $self->{log};
+}
+sub lwarn {
+    my ($self, @msg) = @_;
+    $self->{log}->warn(@msg)
+        if $self->{log};
+}
+sub lcrit {
+    my ($self, @msg) = @_;
+    $self->{log}->crit(@msg)
+        if $self->{log};
+}
+sub ldebug {
+    my ($self, @msg) = @_;
+    $self->{log}->debug(@msg)
+        if $self->{log} and $self->{log}->is_debug();
+}
+
+
+#
+# Protected Subs
+
+sub _debug { return $_[0]->{log}->is_debug(); }
+
+
+#
+# Private
+
+sub __ban {
+    my ($ipt, $proto, $ip, $port) = @_;
+
+    my $ban = sprintf '%s -I INPUT 1 -p %s -s %s --dport %d -m comment --comment %s -j REJECT',
+        $ipt, $proto, $ip, $port, $IPBANID;
+
+    qx($ban);
+
+    1;
 }
 
 
