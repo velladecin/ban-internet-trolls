@@ -169,18 +169,26 @@ sub __ingest {
     
     my $now = time();
     my $gbase = $self->{$ipver}{grace};
+    my $bbase = $self->{$ipver}{banned};
     my $cbase = $self->{$ipver}{candidate};
-    # don't do anything with 'banned',
-    # they should not show up here at all - they're currently banned
 
     if (keys %$gbase && $gbase->{$sid}{$ip}) {
+        $self->linfo("Ingest & update grace cache for $ip");
         $gbase->{$sid}{$ip}{lastseen} = $now;
+    }
+    elsif (keys %$bbase && $bbase->{$sid}{$ip}) {
+        # we should not need to do anything with 'banned',
+        # but there may be a little race condition..
+        $self->linfo("Ingest & update banned!!! cache for $ip - how did this happen??");
+        $bbase->{$sid}{$ip}{lastseen} = $now;
     }
     elsif (keys %$cbase && $cbase->{$sid}{$ip}) {
         $cbase->{$sid}{$ip}{count} += $count;
         $cbase->{$sid}{$ip}{lastseen} = $now;
+        $self->linfo("Ingest & update candidate cache for $ip, count ", $cbase->{$sid}{$ip}{count});
     }
     else {
+        $self->linfo("Ingest & add to candidate cache $ip, count $count");
         $cbase->{$sid}{$ip} = {
             start => $now,
             count => $count,
@@ -304,6 +312,27 @@ sub enforce {
             #   then do nothing and continue
             next;
         }
+
+        my %counts;
+        for my $type (qw(grace banned candidate)) {
+            if ($self->{$ipver}{$type} && keys %{$self->{$ipver}{$type}}) {
+                my $base = $self->{$ipver}{$type};
+
+                for my $sid (keys %$base) {
+                    $counts{$sid}{$type} = [ sort keys %{$base->{$sid}} ];
+                }
+            }
+            else {
+                $counts{none}{$type} = [];
+            }
+        }
+
+        for my $sid (sort keys %counts) {
+            for my $type (sort keys %{$counts{$sid}}) {
+                my $count = scalar @{$counts{$sid}{$type}};
+                $self->ldebug("SID: $sid, $type count: $count, IPs:", join(', ', @{$counts{$sid}{$type}}));
+            }
+        }
     }
 }
 
@@ -329,7 +358,10 @@ sub reconcile {
 
     $self->ldebug("Reconciling: $rulecount rules,", scalar(keys %rules), "sid");
 
-    # Run thru what we have, look it up in $self and reconcile each entry
+    # TODO fix this to loop thru ip4, ip6
+
+    # Run thru what we have collected above,
+    # and look it up in $self to reconcile each entry
     my $bbase = $self->{ip4}{banned};
     my $now = time();
     for my $sid (keys %rules) {
@@ -338,6 +370,11 @@ sub reconcile {
                 $bbase->{$sid}{$ip}{reconciled} = 1
             }
             else {
+                # Before adding to banned, better make sure
+                # that the entry does not exist in candidates or grace.
+                # There's a miniscule chance of a race condition..
+                my $gbase = $self->{ip4}{grace};
+                my $cbase = $self->{ip4}{candidate};
                 $bbase->{$sid}{$ip} = {
                     start => $now,
                     lastseen => $now,
@@ -352,7 +389,7 @@ sub reconcile {
         for my $ip (keys %{$bbase->{$sid}}) {
             unless ($bbase->{$sid}{$ip}{reconciled}) {
                 # TODO - input to bantime-grace
-                $self->lwarn("Removing banned entry due to reconciliation: $sid/$ip");
+                $self->lwarn("Removing from in-memory(banned) collection due to reconciliation: $sid, $ip");
                 delete $bbase->{$sid}{$ip};
                 next;
             }
@@ -398,6 +435,7 @@ sub ldebug {
 #
 # Protected Subs
 
+# TODO remove this and debugging Dumper in enforce()
 sub _debug { return $_[0]->{log}->is_debug(); }
 
 
