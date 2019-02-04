@@ -33,7 +33,7 @@ $SIG{INT}  = \&killhandler;
 $SIG{TERM} = \&killhandler;
 $SIG{HUP}  = \&huphandler;
 sub killhandler {
-    $Ipban->linfo("Caught signal - $!");
+    $Ipban->linfo("Stopping daemon and exiting.. ($!)");
     die "Caught signal - $!";
 }
 sub huphandler {
@@ -84,6 +84,8 @@ while (1) {
                 seek AUTHLOG, 0, SEEK_END or die "Cannot SEEK_END '$authlog', $!";
                 my $pos = tell AUTHLOG;
 
+                $Ipban->ldebug("First run reading $authlog from: position $pos, inode $inode");
+
                 print $p "pos:$pos\n";
                 print $p "inode:$inode\n";
                 goto EXIT;
@@ -92,10 +94,12 @@ while (1) {
             if ($inode != $pos{$name}{inode}) {
                 # file has changed (eg: logrotate)
                 # start reading from the top
+                $Ipban->ldebug("$authlog: Inode has changed, opening new file");
                 $pos{$name}{pos} = 0;
             }
 
             # read from last known $pos
+            $Ipban->ldebug("Reading $authlog from: position $pos{$name}{pos}");
             seek AUTHLOG, $pos{$name}{pos}, SEEK_SET or die "Cannot SEEK_SET '$authlog', $!";
             my @logchunk = <AUTHLOG>;
             # update $pos
@@ -197,6 +201,7 @@ sub __init {
 
     # start/reload info logging
     if (@services) {
+        $logger->info("Starting daemon..");
         $logger->info("Configured services");
         $logger->info("===================");
         for my $s (@services) {
