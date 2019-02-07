@@ -201,16 +201,13 @@ sub __init {
 
     # start/reload info logging
     if (@services) {
+        $logger->info("===================");
         $logger->info("Starting daemon..");
         $logger->info("Configured services");
         $logger->info("===================");
         for my $s (@services) {
-            $logger->info("Service: ", $s->getname());
-            $logger->info("Proto: ", $s->getproto());
-            $logger->info("Port: ", $s->getport());
-            $logger->info("Banfilter: ", $s->getbanfilter());
-            $logger->info("Bantime: ", $s->getbantime());
-            $logger->info("Bantime-grace: ", $s->getbantimegrace());
+            $logger->info( sprintf 'Service: %s, Proto: %s, Port: %d', $s->getname(), $s->getproto(), $s->getport() );
+            $logger->info( sprintf 'Banfilter: %s, Bantime: %ds, Bantime-grace: %ds', $s->getbanfilter(), $s->getbantime(), $s->getbantimegrace() );
             $logger->info("Whitelist: ", join ', ', $s->getwhitelist());
         }
     }
