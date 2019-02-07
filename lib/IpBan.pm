@@ -178,7 +178,9 @@ sub __ingest {
     }
     elsif (keys %$bbase && $bbase->{$sid}{$ip}) {
         # we should not need to do anything with 'banned',
-        # but there may be a little race condition..
+        # but there may be a little race condition, where when keepalive
+        # connection is used we can get additional auth fail attempt even
+        # after we have banned the IP. Should be max of 2 attempts..
         $self->linfo("Ingest & update banned!!! cache for $ip - how did this happen??");
         $bbase->{$sid}{$ip}{lastseen} = $now;
     }
@@ -360,7 +362,7 @@ sub reconcile {
 
     # TODO fix this to loop thru ip4, ip6
 
-    # Run thru what we have collected above,
+    # Run thru what we have collected above, 
     # and look it up in $self to reconcile each entry
     my $bbase = $self->{ip4}{banned};
     my $now = time();
