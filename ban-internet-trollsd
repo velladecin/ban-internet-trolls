@@ -84,7 +84,7 @@ while (1) {
                 seek AUTHLOG, 0, SEEK_END or die "Cannot SEEK_END '$authlog', $!";
                 my $pos = tell AUTHLOG;
 
-                $Ipban->ldebug("First run reading $authlog from: position $pos, inode $inode");
+                $Ipban->linfo("First run reading $authlog from: position $pos, inode $inode");
 
                 print $p "pos:$pos\n";
                 print $p "inode:$inode\n";
@@ -92,10 +92,12 @@ while (1) {
             }
 
             if ($inode != $pos{$name}{inode}) {
-                # file has changed (eg: logrotate)
-                # start reading from the top
-                $Ipban->ldebug("$authlog: Inode has changed, opening new file");
+                # file has changed (eg: logrotate), start reading from the top
+                $Ipban->lwarn("$authlog: Inode has changed (logrotate?), opening new file");
                 $pos{$name}{pos} = 0;
+
+                # communicate new inode to parent - doh!
+                print $p "inode:$inode\n";
             }
 
             # read from last known $pos
@@ -105,7 +107,9 @@ while (1) {
             # update $pos
             my $pos = tell AUTHLOG;
             close AUTHLOG;
+
             # report new $pos to parent
+            $Ipban->ldebug("Reporting new $authlog pos $pos to parent");
             print $p "pos:$pos\n";
 
             # if any logfile lines are found process them here
@@ -114,8 +118,10 @@ while (1) {
             if (@logchunk) {
                 my $authsearch = $s->getauthlogsearch();
 
+                my $linecount = 0;
                 my %attempt;
                 for my $logline (@logchunk) {
+                    $linecount++;
                     # filter by daemon name if given
                     if ($authsearch->{daemon}) {
                         my $rgxdaemon = $authsearch->{daemon};
@@ -137,6 +143,7 @@ while (1) {
                         }
                     }
                 }
+                $Ipban->linfo("Have processed $linecount lines");
 
                 for my $ipver (keys %attempt) {
                     for my $ip (keys %{$attempt{$ipver}}) {
@@ -159,6 +166,11 @@ while (1) {
             
             # auth file read details
             if ($k eq 'pos' || $k eq 'inode') {
+                if ($k eq 'pos') {
+                    if ($pos{$name}{$k} == $v) {
+                        $Ipban->ldebug("Read pos has not moved from last time: $v");
+                    }
+                }
                 $pos{$name}{$k} = $v;
                 next;
             }
@@ -209,6 +221,7 @@ sub __init {
             $logger->info( sprintf 'Service: %s, Proto: %s, Port: %d', $s->getname(), $s->getproto(), $s->getport() );
             $logger->info( sprintf 'Banfilter: %s, Bantime: %ds, Bantime-grace: %ds', $s->getbanfilter(), $s->getbantime(), $s->getbantimegrace() );
             $logger->info("Whitelist: ", join ', ', $s->getwhitelist());
+            $logger->info("Blacklist: ", join ', ', $s->getblacklist());
         }
     }
 
