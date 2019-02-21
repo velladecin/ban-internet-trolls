@@ -89,6 +89,13 @@ sub __init {
     $self->{log}->info("IPv4: None")
         unless keys %ban4;
 
+    # TODO
+    # ban here blacklisted IPs
+
+
+
+
+
     # TODO ipv6
 #    my %ban6;
 #    for my $line (grep /$IPBANID/, qx($IPT6 -S INPUT)) {
@@ -181,7 +188,7 @@ sub __ingest {
         # but there may be a little race condition, where when keepalive
         # connection is used we can get additional auth fail attempt even
         # after we have banned the IP. Should be max of 2 attempts..
-        $self->linfo("Ingest & update banned!!! cache for $ip - how did this happen??");
+        $self->linfo("Ingest & update banned cache for $ip - already banned but still using keep-alive conn");
         $bbase->{$sid}{$ip}{lastseen} = $now;
     }
     elsif (keys %$cbase && $cbase->{$sid}{$ip}) {

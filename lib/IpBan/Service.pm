@@ -87,6 +87,15 @@ sub __init {
     }
     $self->{whitelist} = \@whitelist;
 
+    # blacklisting
+    my @blacklist = ();
+    if ($args{balacklist} and length $args{blacklist}) {
+        # IPs
+        $args{blacklist} =~ s/\s//g;
+        @blacklist = split /,/, $args{blacklist};
+    }
+    $self->{blacklist} = \@blacklist;
+
     1;
 }
 
@@ -101,6 +110,7 @@ sub getbanfilter { return $_[0]->{banfilter} }
 sub getauthlog   { return $_[0]->{authlog}   }
 sub getauthlogsearch { return $_[0]->{authlogsearch} }
 sub getwhitelist { return wantarray ? @{$_[0]->{whitelist}} : $_[0]->{whitelist} }
+sub getblacklist { return wantarray ? @{$_[0]->{blacklist}} : $_[0]->{blacklist} }
 
 
 #
