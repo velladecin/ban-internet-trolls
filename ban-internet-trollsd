@@ -215,7 +215,7 @@ while (1) {
 sub __init {
     my ($conf, $log, $debug) = @_;
 
-    my $ipc = IpBan::Config->new($conf, $log, $debug);
+    my $ipc = IpBan::Config->new($conf, $log);
     my @services = $ipc->parse();
 
     my $logger = Log->open(logfile=>$ipc->logfile(), debug=>$debug, flushlog=>1);
@@ -224,6 +224,19 @@ sub __init {
     if (@services) {
         $logger->info("===================");
         $logger->info("Starting daemon..");
+        $logger->info(<<'EOF');
+BAN Internet Trolls
+ _______      ____   ,---.   .--.-./`),---------.
+\  ____  \  .'  __ `.|    \  |  \ .-.')          \
+| |    \ | /   '  \  \  ,  \ |  / `-' \`--.  ,---'
+| |____/ / |___|  /  |  |\_ \|  |`-'`"`   |   \
+|   _ _ '.    _.-`   |  _( )_\  |.---.    :_ _:
+|  ( ' )  \.'   _    | (_ o _)  ||   |    (_I_)
+| (_{;}_) ||  _( )_  |  (_,_)\  ||   |   (_(=)_)
+|  (_,_)  /\ (_ o _) /  |    |  ||   |    (_I_)
+/_______.'  '.(_,_).''--'    '--''---'    '---'
+
+EOF
         $logger->info("Configured services");
         $logger->info("===================");
         for my $s (@services) {
