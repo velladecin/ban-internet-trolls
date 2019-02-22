@@ -32,13 +32,21 @@ END {
 $SIG{INT}  = \&killhandler;
 $SIG{TERM} = \&killhandler;
 $SIG{HUP}  = \&huphandler;
+$SIG{USR1} = \&debugon;
+$SIG{USR2} = \&debugoff;
 sub killhandler {
-    $Ipban->linfo("Stopping daemon and exiting.. ($!)");
-    die "Caught signal - $!";
+    $Ipban->linfo("Stopping daemon and exiting.. (caught: $!)");
+    exit 0;
 }
 sub huphandler {
     $Ipban->linfo("Caught -HUP, reloading config..");
     ($Ipban, @Services) = __init();
+}
+sub debugon {
+    $Ipban->lsetdebug(1);
+}
+sub debugoff {
+    $Ipban->lsetdebug(0);
 }
 
 
@@ -104,6 +112,7 @@ while (1) {
             $Ipban->ldebug("Reading $authlog from: position $pos{$name}{pos}");
             seek AUTHLOG, $pos{$name}{pos}, SEEK_SET or die "Cannot SEEK_SET '$authlog', $!";
             my @logchunk = <AUTHLOG>;
+
             # update $pos
             my $pos = tell AUTHLOG;
             close AUTHLOG;
