@@ -439,6 +439,11 @@ sub ldebug {
     $self->{log}->debug(@msg)
         if $self->{log} and $self->{log}->is_debug();
 }
+sub lsetdebug {
+    my ($self, $value) = @_;
+    return $self->{log}->setdebug($value);
+}
+
 
 
 #

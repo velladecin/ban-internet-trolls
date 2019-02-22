@@ -109,6 +109,29 @@ bit_status() {
     status_of_proc -p $BIT_PIDFILE "$BIT_DAEMON" $BIT_DAEMON_NAME
 }
 
+bit_debug() {
+    if daemon_up; then
+        getpid
+        local pid=$?
+
+        case "$1" in
+            0) sig=10; echo -n "Turning debug ON.. "  ;; # USR1
+            1) sig=12; echo -n "Turning debug OFF.. " ;; # USR2
+        esac
+
+        kill -$sig $pid
+        r=$?
+
+        if [ $r -eq 0 ]; then
+            echo "Success"
+        else
+            echo "Failed"
+        fi
+    else
+        status_of_proc -p $BIT_PIDFILE "$BIT_DAEMON" $BIT_DAEMON_NAME
+    fi
+}
+
 case "$1" in
     start)
         bit_start
@@ -126,8 +149,14 @@ case "$1" in
     status)
         bit_status
     ;;
+    debugon)
+        bit_debug 0
+    ;;
+    debugoff)
+        bit_debug 1
+    ;;
     *)
-        echo "Usage: /etc/init.d/bit {start|stop|restart|reload|status}"
+        echo "Usage: /etc/init.d/bit {start|stop|restart|reload|status|debugon|debugoff}"
         exit 1
 esac
 

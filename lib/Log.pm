@@ -123,4 +123,27 @@ sub _log {
 
 sub is_debug { return $_[0]->{debug}; }
 
+sub setdebug {
+    my ($self, $value) = @_;
+
+    # accept 1/0
+    unless (defined $value) {
+        $self->warn("Undefined value for setdebug(), ignoring..");
+        return 0;
+    }
+
+    if ($value < 0) {
+        $self->warn("Negative numbers not accepted by setdebug(), ignoring..");
+        return 0;
+    }
+
+    $value = 1
+        if $value > 1;
+
+    $self->{debug} = $value;
+
+    1;
+}
+
+
 1;
