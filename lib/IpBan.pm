@@ -9,6 +9,7 @@ use Log;
 my $IPT4 = '/sbin/iptables';
 my $IPT6 = '/sbin/ip6tables';
 my $IPBANID = 'IPBANxkeivFHio5qdiIHFi3nf';
+my $IPBANBLID = 'IPBANblacklist';
 
 =head1 NAME
 
@@ -46,19 +47,19 @@ See SYNOPSIS
 =cut
 
 sub new {
-    my ($class, $log) = @_;
+    my ($class, $log, $blacklist) = @_;
 
     die "Expecting Log object as parameter for IpBan"
         unless ref $log eq 'Log';
 
     my $self = bless {log=>$log}, $class;
-    $self->__init();
+    $self->__init($blacklist);
 
     return $self;
 }
 
 sub __init {
-    my $self = shift;
+    my ($self, $blacklist) = @_;
 
     $self->{log}->info("Collecting currently banned IPs (from netfilter)");
 
@@ -92,7 +93,10 @@ sub __init {
     # TODO
     # ban here blacklisted IPs
 
+    $self->{ip4}{blacklist} = $blacklist->{ip4} || {};
+    $self->{ip6}{blacklist} = $blacklist->{ip6} || {};
 
+    #$self->_blreconcile();
 
 
 
@@ -347,8 +351,28 @@ sub enforce {
 
 sub reconcile {
     my $self = shift;
+    #die Dumper $self;
     #-A INPUT -s 129.213.119.45/32 -p tcp -m tcp --dport 22 -m comment --comment IPBANxkeivFHio5qdiIHFi3nf -j REJECT --reject-with icmp-port-unreachable
 
+=head
+    # 1. blacklists
+    my %bl;
+    my $blcount = 0;
+    for my $rule (qx($IPT4 -S INPUT | grep $IPBANBLID)) {
+        my ($ip, $proto, $port, $action) =
+            $rule =~ m|-A INPUT -s (\d+\.\d+\.\d+\.\d+/32) -p (\w+) .* --dport (\d+) .* -j ([A-Z]+).*$|; 
+
+        unless ($ip and $proto and $port and $action) {
+            $self->lcrit("Could not retrieve all values from iptables for blacklist reconciliation: ip:$ip, proto:$proto, port:$port, action:$action");
+            next;
+        }
+
+        my $sid = "$proto:$port";
+        $bl{$sid}{$ip} = 1;
+        $blcount++;
+    }
+
+    # 2. dynamically banned (or not)
     my %rules;
     my $rulecount = 0;
     for my $rule (qx($IPT4 -S INPUT | grep $IPBANID)) {
@@ -364,8 +388,19 @@ sub reconcile {
         $rules{$sid}{$ip} = 1;
         $rulecount++;
     }
+=cut
+    #my ($bl, $blcount) = $self->__getblrules();
+    #$self->ldebug("Reconciling blacklist: $blcount rules,", scalar(keys %$bl), "sid");
 
-    $self->ldebug("Reconciling: $rulecount rules,", scalar(keys %rules), "sid");
+    # TODO fix this to loop thru ip4, ip6
+
+    #my $blbase = $self->{ip4}{blacklist};
+
+    #$self->_blreconcile();
+
+
+    my ($rules, $rulecount) = $self->__getdynrules();
+    $self->ldebug("Reconciling: $rulecount rules,", scalar(keys %$rules), "sid");
 
     # TODO fix this to loop thru ip4, ip6
 
@@ -373,8 +408,8 @@ sub reconcile {
     # and look it up in $self to reconcile each entry
     my $bbase = $self->{ip4}{banned};
     my $now = time();
-    for my $sid (keys %rules) {
-        for my $ip (keys %{$rules{$sid}}) {
+    for my $sid (keys %$rules) {
+        for my $ip (keys %{$rules->{$sid}}) {
             if ($bbase->{$sid}{$ip}) {
                 $bbase->{$sid}{$ip}{reconciled} = 1
             }
@@ -383,7 +418,10 @@ sub reconcile {
                 # that the entry does not exist in candidates or grace.
                 # There's a miniscule chance of a race condition..
                 my $gbase = $self->{ip4}{grace};
+                delete $gbase->{$sid}{$ip} if $gbase->{$sid}{$ip};
                 my $cbase = $self->{ip4}{candidate};
+                delete $cbase->{$sid}{$ip} if $cbase->{$sid}{$ip};
+
                 $bbase->{$sid}{$ip} = {
                     start => $now,
                     lastseen => $now,
@@ -455,6 +493,38 @@ sub _debug { return $_[0]->{log}->is_debug(); }
 
 #
 # Private
+
+sub __getblrules {
+    my $self = shift;
+    return $self->__getrules($IPBANBLID, 'blacklist');
+}
+
+sub __getdynrules {
+    my $self = shift;
+    return $self->__getrules($IPBANID, 'dynamic rules');
+}
+
+sub __getrules {
+    my ($self, $rulestring, $ruletype) = @_;
+
+    my %rules;
+    my $rulecount = 0;
+    for my $rule (qx($IPT4 -S INPUT | grep $rulestring)) {
+        my ($ip, $proto, $port, $action) =
+            $rule =~ m|-A INPUT -s (\d+\.\d+\.\d+\.\d+/32) -p (\w+) .* --dport (\d+) .* -j ([A-Z]+).*$|; 
+
+        unless ($ip and $proto and $port and $action) {
+            $self->lcrit("Could not retrieve all values from iptables for $ruletype reconciliation: ip:$ip, proto:$proto, port:$port, action:$action");
+            next;
+        }
+
+        my $sid = "$proto:$port";
+        $rules{$sid}{$ip} = 1;
+        $rulecount++;
+    }
+
+    return \%rules, $rulecount;
+}
 
 sub __ban {
     my ($ipt, $proto, $ip, $port) = @_;

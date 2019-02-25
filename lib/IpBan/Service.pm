@@ -78,7 +78,26 @@ sub __init {
     die "Banfilter must be in format 'int/int' (connection attempts/time period [seconds])" unless $banfilter =~ m|^\d+/\d+$|;
     $self->{banfilter} = $banfilter;
 
-    # whitelisting
+    # black/white listing
+    for my $type (qw(whitelist4 whitelist6 blacklist4 blacklist6)) {
+        my @list = ();
+
+        if ($args{$type} and length $args{$type}) {
+            # IPs
+            $args{$type} =~ s/\s//g;
+            @list = split /,/, $args{$type};
+        }
+
+        $self->{$type} = \@list;
+    }
+
+=head
+    if ($args{whitelist4} and length $args{whitelist4}) {
+        # IPs
+        $args{whitelist4} =~ s/\s//g;
+        @whitelist = split /,/, $args{whitelist4};
+    }
+
     my @whitelist = ();
     if ($args{whitelist} and length $args{whitelist}) {
         # IPs
@@ -89,28 +108,31 @@ sub __init {
 
     # blacklisting
     my @blacklist = ();
-    if ($args{balacklist} and length $args{blacklist}) {
+    if ($args{blacklist} and length $args{blacklist}) {
         # IPs
         $args{blacklist} =~ s/\s//g;
         @blacklist = split /,/, $args{blacklist};
     }
     $self->{blacklist} = \@blacklist;
+=cut
 
     1;
 }
 
-sub getid        { return $_[0]->{proto}. ":" .$_[0]->{port} } # proto+port is unique
-sub getname      { return $_[0]->{name}      }
-sub getport      { return $_[0]->{port}      }
-sub getproto     { return $_[0]->{proto}     }
-sub getipver     { return wantarray ? split(',', $_[0]->{ipver}) : $_[0]->{ipver} }
-sub getbantime   { return $_[0]->{bantime}   }
+sub getid           { return $_[0]->{proto}. ":" .$_[0]->{port} } # proto+port is unique
+sub getname         { return $_[0]->{name}      }
+sub getport         { return $_[0]->{port}      }
+sub getproto        { return $_[0]->{proto}     }
+sub getipver        { return wantarray ? split(',', $_[0]->{ipver}) : $_[0]->{ipver} }
+sub getbantime      { return $_[0]->{bantime}   }
 sub getbantimegrace { return $_[0]->{'bantime-grace'} }
-sub getbanfilter { return $_[0]->{banfilter} }
-sub getauthlog   { return $_[0]->{authlog}   }
+sub getbanfilter    { return $_[0]->{banfilter} }
+sub getauthlog      { return $_[0]->{authlog}   }
 sub getauthlogsearch { return $_[0]->{authlogsearch} }
-sub getwhitelist { return wantarray ? @{$_[0]->{whitelist}} : $_[0]->{whitelist} }
-sub getblacklist { return wantarray ? @{$_[0]->{blacklist}} : $_[0]->{blacklist} }
+sub getwhitelist4   { return wantarray ? @{$_[0]->{whitelist4}} : $_[0]->{whitelist4} }
+sub getwhitelist6   { return wantarray ? @{$_[0]->{whitelist6}} : $_[0]->{whitelist6} }
+sub getblacklist4   { return wantarray ? @{$_[0]->{blacklist4}} : $_[0]->{blacklist4} }
+sub getblacklist6   { return wantarray ? @{$_[0]->{blacklist6}} : $_[0]->{blacklist6} }
 
 
 #

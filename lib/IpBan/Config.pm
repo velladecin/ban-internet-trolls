@@ -117,7 +117,7 @@ sub parse {
 
             # service header
             my $previousS = $service;
-            if ($line =~ /\:[A-Za-z]+\:/) {
+            if ($line =~ /^\s*\:[A-Za-z]+\:\s*$/) {
                 ($service) = $line =~ /\:([A-Za-z]+)\:/;
                 $service = uc $service;
 

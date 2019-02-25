@@ -176,7 +176,7 @@ while (1) {
             # auth file read details
             if ($k eq 'pos' || $k eq 'inode') {
                 if ($k eq 'pos') {
-                    if ($pos{$name}{$k} == $v) {
+                    if (defined $pos{$name}{$name} && $pos{$name}{$k} == $v) {
                         $Ipban->ldebug("Read pos has not moved from last time: $v");
                     }
                 }
@@ -185,10 +185,14 @@ while (1) {
             }
 
             # exclude whitelisted IPs
-            if (grep /^${v}$/, $s->getwhitelist()) {
+            if (grep /^${v}$/, $s->getwhitelist4(), $s->getwhitelist6()) {
                 $Ipban->linfo("Ignoring whitelisted IP: $v");
                 next;
             }
+            #if (grep /^${v}$/, $s->getwhitelist6()) {
+                #$Ipban->linfo("Ignoring whitelisted IP: $v");
+                #next;
+            #}
 
             # ingest failed auth attempts
             $Ipban->ingest4($v, $c, $s->getid()) if $k eq 'ip4';
@@ -221,6 +225,7 @@ sub __init {
     my $logger = Log->open(logfile=>$ipc->logfile(), debug=>$debug, flushlog=>1);
 
     # start/reload info logging
+    my %blacklist;
     if (@services) {
         $logger->info("===================");
         $logger->info("Starting daemon..");
@@ -228,8 +233,8 @@ sub __init {
 BAN Internet Trolls
  _______      ____   ,---.   .--.-./`),---------.
 \  ____  \  .'  __ `.|    \  |  \ .-.')          \
-| |    \ | /   '  \  \  ,  \ |  / `-' \`--.  ,---'
-| |____/ / |___|  /  |  |\_ \|  |`-'`"`   |   \
+| |    \ | /   '  \  \  ,  \ |  / `-' \`--.   .--'
+| |____/ / |___|  /  |  |\_ \|  |`-'`"`   |   |
 |   _ _ '.    _.-`   |  _( )_\  |.---.    :_ _:
 |  ( ' )  \.'   _    | (_ o _)  ||   |    (_I_)
 | (_{;}_) ||  _( )_  |  (_,_)\  ||   |   (_(=)_)
@@ -239,15 +244,37 @@ BAN Internet Trolls
 EOF
         $logger->info("Configured services");
         $logger->info("===================");
-        for my $s (@services) {
+
+        for (my $count=0; $count<@services; $count++) {
+            my $s = $services[$count];
             $logger->info( sprintf 'Service: %s, Proto: %s, Port: %d', $s->getname(), $s->getproto(), $s->getport() );
             $logger->info( sprintf 'Banfilter: %s, Bantime: %ds, Bantime-grace: %ds', $s->getbanfilter(), $s->getbantime(), $s->getbantimegrace() );
-            $logger->info("Whitelist: ", join ', ', $s->getwhitelist());
-            $logger->info("Blacklist: ", join ', ', $s->getblacklist());
+
+            # whitelist
+            if (my @wl4 = $s->getwhitelist4()) {
+                $logger->info("Whitelist ip4: ", join ', ', @wl4);
+            }
+            if (my @wl6 = $s->getwhitelist6()) {
+                $logger->info("Whitelist ip6: ", join ', ', @wl6);
+            }
+
+            # blacklist + collect for Ipban
+            my $sid = $s->getid();
+            if (my @bl4 = $s->getblacklist4()) {
+                $logger->info("Blacklist ip4: ", join ', ', @bl4);
+                $blacklist{ip4}{$sid} = \@bl4;
+            }
+            if (my @bl6 = $s->getblacklist6()) {
+                $logger->info("Blacklist ip6: ", join ', ', @bl6);
+                $blacklist{ip6}{$sid} = \@bl6;
+            }
+
+            $logger->info("---")
+                if $count < (@services - 1);
         }
     }
 
-    my $ipban = IpBan->new($logger);
+    my $ipban = IpBan->new($logger, \%blacklist);
 
     return $ipban, @services;
 }
