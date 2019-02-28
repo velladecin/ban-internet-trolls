@@ -90,13 +90,11 @@ sub __init {
     $self->{log}->info("IPv4: None")
         unless keys %ban4;
 
-    # TODO
-    # ban here blacklisted IPs
-
     $self->{ip4}{blacklist} = $blacklist->{ip4} || {};
     $self->{ip6}{blacklist} = $blacklist->{ip6} || {};
 
-    #$self->_blreconcile();
+    # reconcile blacklists on startup
+    $self->_blreconcile();
 
 
 
@@ -248,7 +246,7 @@ sub enforce {
 
             # physically ban
             my $ipt = $ipver =~ /4/ ? $IPT4 : $IPT6;
-            __ban($ipt, $service->getproto(), $ip, $service->getport());
+            __ban($ipt, $service->getproto(), $ip, $service->getport(), $IPBANID);
 
             DELETE_FROM_GRACE:
             delete $gbase->{$ip};
@@ -307,7 +305,7 @@ sub enforce {
 
                 # physically ban
                 my $ipt = $ipver =~ /4/ ? $IPT4 : $IPT6;
-                __ban($ipt, $service->getproto(), $ip, $service->getport());
+                __ban($ipt, $service->getproto(), $ip, $service->getport(), $IPBANID);
 
                 next;
             }
@@ -351,58 +349,14 @@ sub enforce {
 
 sub reconcile {
     my $self = shift;
-    #die Dumper $self;
-    #-A INPUT -s 129.213.119.45/32 -p tcp -m tcp --dport 22 -m comment --comment IPBANxkeivFHio5qdiIHFi3nf -j REJECT --reject-with icmp-port-unreachable
 
-=head
-    # 1. blacklists
-    my %bl;
-    my $blcount = 0;
-    for my $rule (qx($IPT4 -S INPUT | grep $IPBANBLID)) {
-        my ($ip, $proto, $port, $action) =
-            $rule =~ m|-A INPUT -s (\d+\.\d+\.\d+\.\d+/32) -p (\w+) .* --dport (\d+) .* -j ([A-Z]+).*$|; 
+    # TODO fix this to do ip4 + ip6
 
-        unless ($ip and $proto and $port and $action) {
-            $self->lcrit("Could not retrieve all values from iptables for blacklist reconciliation: ip:$ip, proto:$proto, port:$port, action:$action");
-            next;
-        }
-
-        my $sid = "$proto:$port";
-        $bl{$sid}{$ip} = 1;
-        $blcount++;
-    }
-
-    # 2. dynamically banned (or not)
-    my %rules;
-    my $rulecount = 0;
-    for my $rule (qx($IPT4 -S INPUT | grep $IPBANID)) {
-        my ($ip, $proto, $port, $action) =
-            $rule =~ m|-A INPUT -s (\d+\.\d+\.\d+\.\d+/32) -p (\w+) .* --dport (\d+) .* -j ([A-Z]+).*$|; 
-
-        unless ($ip and $proto and $port and $action) {
-            $self->lcrit("Could not retrieve all values from iptables for reconciliation: ip:$ip, proto:$proto, port:$port, action:$action");
-            next;
-        }
-
-        my $sid = "$proto:$port";
-        $rules{$sid}{$ip} = 1;
-        $rulecount++;
-    }
-=cut
-    #my ($bl, $blcount) = $self->__getblrules();
-    #$self->ldebug("Reconciling blacklist: $blcount rules,", scalar(keys %$bl), "sid");
-
-    # TODO fix this to loop thru ip4, ip6
-
-    #my $blbase = $self->{ip4}{blacklist};
-
-    #$self->_blreconcile();
-
+    # reconcile blacklists
+    $self->_blreconcile();
 
     my ($rules, $rulecount) = $self->__getdynrules();
     $self->ldebug("Reconciling: $rulecount rules,", scalar(keys %$rules), "sid");
-
-    # TODO fix this to loop thru ip4, ip6
 
     # Run thru what we have collected above, 
     # and look it up in $self to reconcile each entry
@@ -490,6 +444,65 @@ sub lsetdebug {
 # TODO remove this and debugging Dumper in enforce()
 sub _debug { return $_[0]->{log}->is_debug(); }
 
+sub _blreconcile {
+    my $self = shift;
+
+    # TODO fix this to loop thru ip4, ip6
+    # TODO needs to 4,6 getblrules()
+
+    my ($blrules, $blcount) = $self->__getblrules();
+    $self->ldebug("Reconciling IPv4 blacklist: $blcount rules,", scalar(keys %$blrules), "sid");
+
+    my $blbase4 = $self->{ip4}{blacklist};
+    my $blbase6 = $self->{ip6}{blacklist};
+
+    # if no blacklist given, remove all existing blacklist rules
+    unless (keys %$blbase4) {
+        for my $sid (keys %$blrules) {
+            my ($proto, $port) = split /:/, $sid;
+
+            for my $ip (keys %{$blrules->{$sid}}) {
+                $self->linfo("*** UN-banning: $ip, $sid (previously blacklisted, but current blacklist is empty)");
+                __unban($IPT4, $proto, $ip, $port, $IPBANBLID)
+            }
+        }
+
+        # nothing else to do here
+        goto RETURN;
+    }
+
+    # Go thru given blacklist and remove each from the current rules.
+    # Whatever is left needs to be removed, whatever is missing needs to be added.
+
+    for my $sid (keys %$blbase4) {
+        my ($proto, $port) = split /:/, $sid;
+
+        for my $ip (@{$blbase4->{$sid}}) {
+            # be wary of refrences :)
+            my $ips = $ip . "/32";
+
+            if ($blrules->{$sid} and $blrules->{$sid}{$ips}) {
+                delete $blrules->{$sid}{$ips};
+                next;
+            }
+
+            $self->linfo("!!! Banning: $ips, $sid (blacklisted)");
+            __ban($IPT4, $proto, $ips, $port, $IPBANBLID)
+        }
+
+        # remove from blacklist whatever is left
+        if (keys %{$blrules->{$sid}}) {
+            for my $ip (keys %{$blrules->{$sid}}) {
+                $self->linfo("*** UN-banning: $ip, $sid (previously blacklisted, but not present in current blacklist)");
+                __unban($IPT4, $proto, $ip, $port, $IPBANBLID);
+            }
+        }
+    }
+
+    RETURN:
+    1;
+}
+
 
 #
 # Private
@@ -506,6 +519,8 @@ sub __getdynrules {
 
 sub __getrules {
     my ($self, $rulestring, $ruletype) = @_;
+
+    # TODO IPv6 + cascade upstream
 
     my %rules;
     my $rulecount = 0;
@@ -527,12 +542,23 @@ sub __getrules {
 }
 
 sub __ban {
-    my ($ipt, $proto, $ip, $port) = @_;
+    my ($ipt, $proto, $ip, $port, $comment) = @_;
 
     my $ban = sprintf '%s -I INPUT 1 -p %s -s %s --dport %d -m comment --comment %s -j REJECT',
-        $ipt, $proto, $ip, $port, $IPBANID;
+        $ipt, $proto, $ip, $port, $comment;
 
     qx($ban);
+
+    1;
+}
+
+sub __unban {
+    my ($ipt, $proto, $ip, $port, $comment) = @_;
+
+    my $unban = sprintf '%s -D INPUT -p %s -s %s --dport %d -m comment --comment %s -j REJECT',
+        $ipt, $proto, $ip, $port, $comment;
+
+    qx($unban);
 
     1;
 }
