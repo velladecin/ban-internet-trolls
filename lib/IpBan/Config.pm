@@ -8,8 +8,8 @@ use Data::Dumper;
 
 my %DEFAULT = (
     debug => 0,
-    conf => '/etc/ban-internet-trolls/ban-internet-trolls.conf',
-    log => '/var/log/ban-internet-trolls.log',
+    conf => '/etc/banit/banit.conf',
+    log => '/var/log/banit.log',
 );
 
 sub new {
