@@ -152,7 +152,7 @@ while (1) {
                         }
                     }
                 }
-                $Ipban->linfo("Have processed $linecount lines");
+                $Ipban->linfo("Have processed $linecount lines ($authlog)");
 
                 for my $ipver (keys %attempt) {
                     for my $ip (keys %{$attempt{$ipver}}) {
@@ -189,10 +189,6 @@ while (1) {
                 $Ipban->linfo("Ignoring whitelisted IP: $v");
                 next;
             }
-            #if (grep /^${v}$/, $s->getwhitelist6()) {
-                #$Ipban->linfo("Ignoring whitelisted IP: $v");
-                #next;
-            #}
 
             # ingest failed auth attempts
             $Ipban->ingest4($v, $c, $s->getid()) if $k eq 'ip4';
