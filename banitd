@@ -1,0 +1,298 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use Fcntl qw(SEEK_SET SEEK_END);
+use Data::Dumper;
+use FindBin;
+use Getopt::Long;
+use IO::Pipe;
+use lib "$FindBin::Bin/lib";
+use IpBan;
+use IpBan::Config;
+use Log;
+
+my $AUTHFILE_READ_FREQUENCY = 5; # seconds
+
+my $conf = my $log = my $debug = 0;
+GetOptions(
+    help     => \&usage,
+    "conf=s" => \$conf,
+    "log=s"  => \$log,
+    "debug+" => \$debug,
+) or die usage();
+
+my ($Ipban, @Services) = __init($conf, $log, $debug);
+
+END {
+    # close log file handle
+    $Ipban->lclose() if $Ipban;
+}
+
+# Signal handling
+$SIG{INT}  = \&killhandler;
+$SIG{TERM} = \&killhandler;
+$SIG{HUP}  = \&huphandler;
+$SIG{USR1} = \&debugon;
+$SIG{USR2} = \&debugoff;
+sub killhandler {
+    $Ipban->linfo("Stopping daemon and exiting.. (caught: $!)");
+    exit 0;
+}
+sub huphandler {
+    $Ipban->linfo("Caught -HUP, reloading config..");
+    ($Ipban, @Services) = __init();
+}
+sub debugon {
+    $Ipban->lsetdebug(1);
+}
+sub debugoff {
+    $Ipban->lsetdebug(0);
+}
+
+
+#
+# Main
+
+my %pos;
+while (1) {
+    # reconcile on each run (is this too much?)
+    $Ipban->reconcile();
+
+    for my $s (@Services) {
+        # What we're doing here is:
+        # 1. %pos is copied to the child as it is at this very moment - empty on first run, updated after that
+        # 2. Create PIPE to communicate new $pos from child to parent
+        # 3. Update %pos in parent to new $pos
+
+        my $name = $s->getname(); # service name
+        my $p = IO::Pipe->new();
+
+        my $child = fork();
+        unless (defined $child) {
+            my $err = $!;
+            $Ipban->lcrit("Could not fork '$name' service: $err");
+            die $err;
+        }
+
+        if ($child == 0) {
+            $Ipban->ldebug("Running child: $name/$$");
+
+            # child
+            $p->writer();
+
+            my $authlog = $s->getauthlog();
+            my $inode = (stat $authlog)[1];
+
+            $Ipban->ldebug("Opening file $authlog");
+            open AUTHLOG, '<', $authlog or die "Cannot open '$authlog', $!";
+
+            unless ($pos{$name}) {
+                # first run
+                # report current $pos to parent
+                seek AUTHLOG, 0, SEEK_END or die "Cannot SEEK_END '$authlog', $!";
+                my $pos = tell AUTHLOG;
+
+                $Ipban->linfo("First run reading $authlog from: position $pos, inode $inode");
+
+                print $p "pos:$pos\n";
+                print $p "inode:$inode\n";
+                goto EXIT;
+            }
+
+            if ($inode != $pos{$name}{inode}) {
+                # file has changed (eg: logrotate), start reading from the top
+                $Ipban->lwarn("$authlog: Inode has changed (logrotate?), opening new file");
+                $pos{$name}{pos} = 0;
+
+                # communicate new inode to parent - doh!
+                print $p "inode:$inode\n";
+            }
+
+            # read from last known $pos
+            $Ipban->ldebug("Reading $authlog from: position $pos{$name}{pos}");
+            seek AUTHLOG, $pos{$name}{pos}, SEEK_SET or die "Cannot SEEK_SET '$authlog', $!";
+            my @logchunk = <AUTHLOG>;
+
+            # update $pos
+            my $pos = tell AUTHLOG;
+            close AUTHLOG;
+
+            # report new $pos to parent
+            $Ipban->ldebug("Reporting new $authlog pos $pos to parent");
+            print $p "pos:$pos\n";
+
+            # if any logfile lines are found process them here
+            # 1. Service gives ipv4, ipv6, matches
+            # 2. IpBan bans/unbanes
+            if (@logchunk) {
+                my $authsearch = $s->getauthlogsearch();
+
+                my $linecount = 0;
+                my %attempt;
+                for my $logline (@logchunk) {
+                    $linecount++;
+                    # filter by daemon name if given
+                    if ($authsearch->{daemon}) {
+                        my $rgxdaemon = $authsearch->{daemon};
+                        next unless $logline =~ $rgxdaemon;
+                    }
+
+                    for my $match (keys %{$authsearch->{match}}) {
+                        if ($logline =~ /$match/) {
+                            for my $ipver ($s->getipver()) {
+                                # in case ipver is not defined
+                                # within authsearch
+                                if ($authsearch->{match}{$match}{$ipver}) {
+                                    my $rgxip = $authsearch->{match}{$match}{$ipver};
+                                    my ($ip) = $logline =~ $rgxip;
+
+                                    $attempt{$ipver}{$ip}++;
+                                }
+                            }
+                        }
+                    }
+                }
+                $Ipban->linfo("Have processed $linecount lines ($authlog)");
+
+                for my $ipver (keys %attempt) {
+                    for my $ip (keys %{$attempt{$ipver}}) {
+                        print $p "${ipver}:${ip}:$attempt{$ipver}{$ip}\n";
+                    }
+                }
+            }
+
+            EXIT:
+            exit;
+        }
+
+        # parent
+        $p->reader();
+        while (my $line = <$p>) {
+            chomp $line;
+
+            # key, val, count
+            my ($k, $v, $c) = split /:/, $line;
+            
+            # auth file read details
+            if ($k eq 'pos' || $k eq 'inode') {
+                if ($k eq 'pos') {
+                    if (defined $pos{$name}{$name} && $pos{$name}{$k} == $v) {
+                        $Ipban->ldebug("Read pos has not moved from last time: $v");
+                    }
+                }
+                $pos{$name}{$k} = $v;
+                next;
+            }
+
+            # exclude whitelisted IPs
+            if (grep /^${v}$/, $s->getwhitelist4(), $s->getwhitelist6()) {
+                $Ipban->linfo("Ignoring whitelisted IP: $v");
+                next;
+            }
+
+            # ingest failed auth attempts
+            $Ipban->ingest4($v, $c, $s->getid()) if $k eq 'ip4';
+            $Ipban->ingest6($v, $c, $s->getid()) if $k eq 'ip6';
+        }
+
+        # ban/unban
+        $Ipban->enforce($s);
+    }
+
+    for (1..@Services) {
+        my $pid = wait();
+        $Ipban->ldebug("Reaping child: $pid");
+    }
+
+    sleep $AUTHFILE_READ_FREQUENCY;
+}
+
+
+
+#
+# Subs
+
+sub __init {
+    my ($conf, $log, $debug) = @_;
+
+    my $ipc = IpBan::Config->new($conf, $log);
+    my @services = $ipc->parse();
+
+    my $logger = Log->open(logfile=>$ipc->logfile(), debug=>$debug, flushlog=>1);
+
+    # start/reload info logging
+    my %blacklist;
+    if (@services) {
+        $logger->info("===================");
+        $logger->info("Starting daemon..");
+        $logger->info(<<'EOF');
+BAN Internet Trolls
+ _______      ____   ,---.   .--.-./`),---------.
+\  ____  \  .'  __ `.|    \  |  \ .-.')          \
+| |    \ | /   '  \  \  ,  \ |  / `-' \`--.   .--'
+| |____/ / |___|  /  |  |\_ \|  |`-'`"`   |   |
+|   _ _ '.    _.-`   |  _( )_\  |.---.    :_ _:
+|  ( ' )  \.'   _    | (_ o _)  ||   |    (_I_)
+| (_{;}_) ||  _( )_  |  (_,_)\  ||   |   (_(=)_)
+|  (_,_)  /\ (_ o _) /  |    |  ||   |    (_I_)
+/_______.'  '.(_,_).''--'    '--''---'    '---'
+
+EOF
+        $logger->info("Configured services");
+        $logger->info("===================");
+
+        for (my $count=0; $count<@services; $count++) {
+            my $s = $services[$count];
+            $logger->info( sprintf 'Service: %s, Proto: %s, Port: %d', $s->getname(), $s->getproto(), $s->getport() );
+            $logger->info( sprintf 'Banfilter: %s, Bantime: %ds, Bantime-grace: %ds', $s->getbanfilter(), $s->getbantime(), $s->getbantimegrace() );
+
+            # whitelist
+            if (my @wl4 = $s->getwhitelist4()) {
+                $logger->info("Whitelist ip4: ", join ', ', @wl4);
+            }
+            if (my @wl6 = $s->getwhitelist6()) {
+                $logger->info("Whitelist ip6: ", join ', ', @wl6);
+            }
+
+            # blacklist + collect for Ipban
+            my $sid = $s->getid();
+            if (my @bl4 = $s->getblacklist4()) {
+                $logger->info("Blacklist ip4: ", join ', ', @bl4);
+                $blacklist{ip4}{$sid} = \@bl4;
+            }
+            if (my @bl6 = $s->getblacklist6()) {
+                $logger->info("Blacklist ip6: ", join ', ', @bl6);
+                $blacklist{ip6}{$sid} = \@bl6;
+            }
+
+            $logger->info("---")
+                if $count < (@services - 1);
+        }
+    }
+
+    my $ipban = IpBan->new($logger, \%blacklist);
+
+    return $ipban, @services;
+}
+
+sub usage {
+    my $exit = 0;
+    if (my $err = shift) {
+        print "\nERROR: $err\n";
+        $exit = 1;
+    }
+
+    (my $self = $0) =~ s|^.*/||;
+
+    print <<"EOF";
+
+USAGE: $self <option> [ <value> ] ..
+OPTIONS:
+    -h|--help           show this info
+    -c|--conf <file>    use this config file
+    -l|--log  <file>    use this log file
+    -d|--debug          increase log level
+
+EOF
+    exit $exit;
+}
