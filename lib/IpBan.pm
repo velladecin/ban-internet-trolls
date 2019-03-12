@@ -52,67 +52,43 @@ sub new {
     die "Expecting Log object as parameter for IpBan"
         unless ref $log eq 'Log';
 
-    my $self = bless {log=>$log}, $class;
-    $self->__init($blacklist);
+    my $selfbody = {
+        log => $log,
+        ip4 => { blacklist => $blacklist->{ip4} || {} },
+        ip6 => { blacklist => $blacklist->{ip6} || {} },
+    };
+
+    my $self = bless $selfbody, $class;
+    $self->__init();
 
     return $self;
 }
 
 sub __init {
-    my ($self, $blacklist) = @_;
+    my $self = shift;
 
-    $self->{log}->info("Collecting currently banned IPs (from netfilter)");
-
-    # -A INPUT -s 116.31.116.49/32 -p tcp -m tcp --dport 22 -m comment --comment "<$IPBANID>" -j REJECT --reject-with icmp-port-unreachable
-    my %ban4;
-    my %ban6;
-    my $now = time();
-    for my $line (grep /$IPBANID/, qx($IPT4 -S INPUT)) {
-        chomp $line;
-
-        my ($ip, $proto, $port) = $line =~ m|-s\s(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/32)\s-p\s([a-z]+)\s.*--dport\s(\d+)\s|;
-
-        unless ($ip and $proto and $port) {
-            $self->{log}->warn("Could not retrieve service details from rule :: '$line' :: ip:'$ip', proto:'$proto', port:'$port'");
-            next;
-        }
-
-        $self->{log}->info("Found: $ip, $proto, $port");
-
-        # as we cannot say when this IP was banned,
-        # just make it now..
-        $ban4{"$proto:$port"}{$ip} = {
-            start => $now,
-            lastseen => $now,
-        }
-    }
-
-    $self->{log}->info("IPv4: None")
-        unless keys %ban4;
-
-    $self->{ip4}{blacklist} = $blacklist->{ip4} || {};
-    $self->{ip6}{blacklist} = $blacklist->{ip6} || {};
-
-    # reconcile blacklists on startup
+    $self->linfo("Reconciling blacklists on service start (config vs netfilter)");
     $self->_blreconcile();
 
+    my $now = time();
+    for my $ipver (qw(ip4 ip6)) {
+        my %collection;
+        for my $arr ($self->__getrulesdetails($ipver, $IPBANID, 1)) {
+            my ($ip, $proto, $port) = @$arr;
 
+            # on startup we cannot say when the IP was banned,
+            # so.. just make it now
+            $collection {"$proto:$port"}{$ip} = {
+                start => $now,
+                lastseen => $now,
+            };
+        }
 
-    # TODO ipv6
-#    my %ban6;
-#    for my $line (grep /$IPBANID/, qx($IPT6 -S INPUT)) {
-#        chomp $line;
-#
-#        my ($ip, $proto, $port) = $line =~ m||;
-#
-#        print ">>> $line\n";
-#    }
-#
-#    $self->{log}->info("IPv6: None")
-#        unless keys %ban6;
+        $self->linfo(uc($ipver). ": None")
+            unless keys %collection;
 
-    $self->{ip4}{banned} = \%ban4;
-    $self->{ip6}{banned} = \%ban6;
+        $self->{$ipver}{banned} = \%collection;
+    }
 }
 
 =over 8
@@ -174,7 +150,8 @@ sub __ingest {
     die "Invalid ipver '$ipver'"
         unless $ipver =~ /^ip(4|6)$/;
 
-    $ip = "$ip/32" if $ipver =~ /4/;
+    $ip = "$ip/32"  if $ipver eq 'ip4';
+    $ip = "$ip/128" if $ipver eq 'ip6';
     
     my $now = time();
     my $gbase = $self->{$ipver}{grace};
@@ -350,53 +327,54 @@ sub enforce {
 sub reconcile {
     my $self = shift;
 
-    # TODO fix this to do ip4 + ip6
-
     # reconcile blacklists
     $self->_blreconcile();
 
-    my ($rules, $rulecount) = $self->__getdynrules();
-    $self->ldebug("Reconciling: $rulecount rules,", scalar(keys %$rules), "sid");
+    for my $ipv (qw(ip4 ip6)) {
+        my ($rules, $rulecount) = $self->__getdynrules($ipv);
+        $self->ldebug("Reconciling $ipv: $rulecount rules,", scalar(keys %$rules), "sid");
 
-    # Run thru what we have collected above, 
-    # and look it up in $self to reconcile each entry
-    my $bbase = $self->{ip4}{banned};
-    my $now = time();
-    for my $sid (keys %$rules) {
-        for my $ip (keys %{$rules->{$sid}}) {
-            if ($bbase->{$sid}{$ip}) {
-                $bbase->{$sid}{$ip}{reconciled} = 1
-            }
-            else {
-                # Before adding to banned, better make sure
-                # that the entry does not exist in candidates or grace.
-                # There's a miniscule chance of a race condition..
-                my $gbase = $self->{ip4}{grace};
-                delete $gbase->{$sid}{$ip} if $gbase->{$sid}{$ip};
-                my $cbase = $self->{ip4}{candidate};
-                delete $cbase->{$sid}{$ip} if $cbase->{$sid}{$ip};
+        # Run thru what we have collected above, 
+        # and look it up in $self to reconcile each entry
+        my $bbase = $self->{$ipv}{banned};
 
-                $bbase->{$sid}{$ip} = {
-                    start => $now,
-                    lastseen => $now,
-                    reconciled => 1,
-                };
+        my $now = time();
+        for my $sid (keys %$rules) {
+            for my $ip (keys %{$rules->{$sid}}) {
+                if ($bbase->{$sid}{$ip}) {
+                    $bbase->{$sid}{$ip}{reconciled} = 1
+                }
+                else {
+                    # Before adding to banned, better make sure
+                    # that the entry does not exist in candidates or grace.
+                    # There's a miniscule chance of a race condition..
+                    my $gbase = $self->{$ipv}{grace};
+                    my $cbase = $self->{$ipv}{candidate};
+                    delete $gbase->{$sid}{$ip} if $gbase->{$sid}{$ip};
+                    delete $cbase->{$sid}{$ip} if $cbase->{$sid}{$ip};
+
+                    $bbase->{$sid}{$ip} = {
+                        start => $now,
+                        lastseen => $now,
+                        reconciled => 1,
+                    };
+                }
             }
         }
-    }
 
-    # Run thru self and remove anything that's not reconciled
-    for my $sid (keys %$bbase) {
-        for my $ip (keys %{$bbase->{$sid}}) {
-            unless ($bbase->{$sid}{$ip}{reconciled}) {
-                # TODO - input to bantime-grace
-                $self->lwarn("Removing from in-memory(banned) collection due to reconciliation: $sid, $ip");
-                delete $bbase->{$sid}{$ip};
-                next;
+        # Run thru self and remove anything that's not reconciled
+        for my $sid (keys %$bbase) {
+            for my $ip (keys %{$bbase->{$sid}}) {
+                unless ($bbase->{$sid}{$ip}{reconciled}) {
+                    # TODO - input to bantime-grace
+                    $self->lwarn("Removing from in-memory(banned) collection due to reconciliation: $ipv, $sid, $ip");
+                    delete $bbase->{$sid}{$ip};
+                    next;
+                }
+
+                # remove the flag!
+                delete $bbase->{$sid}{$ip}{reconciled};
             }
-
-            # remove the flag!
-            delete $bbase->{$sid}{$ip}{reconciled};
         }
     }
 
@@ -447,59 +425,60 @@ sub _debug { return $_[0]->{log}->is_debug(); }
 sub _blreconcile {
     my $self = shift;
 
-    # TODO fix this to loop thru ip4, ip6
-    # TODO needs to 4,6 getblrules()
+    for my $ipver (qw(ip4 ip6)) {
+        my ($blrules, $blcount) = $self->__getblrules($ipver);
+        $self->ldebug("Reconciling $ipver blacklist: $blcount rules,", scalar(keys %$blrules), "sid");
 
-    my ($blrules, $blcount) = $self->__getblrules();
-    $self->ldebug("Reconciling IPv4 blacklist: $blcount rules,", scalar(keys %$blrules), "sid");
+        my ($cmd, $subnet) = $ipver eq 'ip4'
+            ? ($IPT4, "/32")
+            : ($IPT6, "/128");
 
-    my $blbase4 = $self->{ip4}{blacklist};
-    my $blbase6 = $self->{ip6}{blacklist};
+        my $blbase = $self->{$ipver}{blacklist};
 
-    # if no blacklist given, remove all existing blacklist rules
-    unless (keys %$blbase4) {
-        for my $sid (keys %$blrules) {
+        # if no blacklist given, remove all existing blacklist rules
+        unless (keys %$blbase) {
+            for my $sid (keys %$blrules) {
+                my ($proto, $port) = split /:/, $sid;
+
+                for my $ip (keys %{$blrules->{$sid}}) {
+                    $self->linfo("*** UN-banning: $ip, $sid (previously blacklisted, but current blacklist is empty)");
+                    __unban($cmd, $proto, $ip, $port, $IPBANBLID)
+                }
+            }
+
+            # nothing else to do here
+            next;
+        }
+
+        # Go thru given blacklist and remove each from the current rules.
+        # Whatever is left needs to be removed, whatever is missing needs to be added.
+
+        for my $sid (keys %$blbase) {
             my ($proto, $port) = split /:/, $sid;
 
-            for my $ip (keys %{$blrules->{$sid}}) {
-                $self->linfo("*** UN-banning: $ip, $sid (previously blacklisted, but current blacklist is empty)");
-                __unban($IPT4, $proto, $ip, $port, $IPBANBLID)
-            }
-        }
+            for my $ip (@{$blbase->{$sid}}) {
+                # be wary of refrences :)
+                my $ips = $ip . $subnet;
 
-        # nothing else to do here
-        goto RETURN;
-    }
+                if ($blrules->{$sid} and $blrules->{$sid}{$ips}) {
+                    delete $blrules->{$sid}{$ips};
+                    next;
+                }
 
-    # Go thru given blacklist and remove each from the current rules.
-    # Whatever is left needs to be removed, whatever is missing needs to be added.
-
-    for my $sid (keys %$blbase4) {
-        my ($proto, $port) = split /:/, $sid;
-
-        for my $ip (@{$blbase4->{$sid}}) {
-            # be wary of refrences :)
-            my $ips = $ip . "/32";
-
-            if ($blrules->{$sid} and $blrules->{$sid}{$ips}) {
-                delete $blrules->{$sid}{$ips};
-                next;
+                $self->linfo("!!! Banning: $ips, $sid (blacklisted)");
+                __ban($cmd, $proto, $ips, $port, $IPBANBLID)
             }
 
-            $self->linfo("!!! Banning: $ips, $sid (blacklisted)");
-            __ban($IPT4, $proto, $ips, $port, $IPBANBLID)
-        }
-
-        # remove from blacklist whatever is left
-        if (keys %{$blrules->{$sid}}) {
-            for my $ip (keys %{$blrules->{$sid}}) {
-                $self->linfo("*** UN-banning: $ip, $sid (previously blacklisted, but not present in current blacklist)");
-                __unban($IPT4, $proto, $ip, $port, $IPBANBLID);
+            # remove from blacklist whatever is left
+            if (keys %{$blrules->{$sid}}) {
+                for my $ip (keys %{$blrules->{$sid}}) {
+                    $self->linfo("*** UN-banning: $ip, $sid (previously blacklisted, but not present in current blacklist)");
+                    __unban($cmd, $proto, $ip, $port, $IPBANBLID);
+                }
             }
         }
     }
 
-    RETURN:
     1;
 }
 
@@ -507,35 +486,70 @@ sub _blreconcile {
 #
 # Private
 
-sub __getblrules {
-    my $self = shift;
-    return $self->__getrules($IPBANBLID, 'blacklist');
-}
+sub __getrulesdetails {
+    my ($self, $ipver, $comstring, $init) = @_;
 
-sub __getdynrules {
-    my $self = shift;
-    return $self->__getrules($IPBANID, 'dynamic rules');
-}
+    $self->linfo("Collecting currently banned $ipver IPs (from netfilter)")
+        if $init;
 
-sub __getrules {
-    my ($self, $rulestring, $ruletype) = @_;
+    my ($cmd, $rgx) = $ipver eq 'ip4'
+# -A INPUT -s 95.85.12.206/32 -p tcp -m tcp --dport 22 -m comment --comment IPBANxkeivFHio5qdiIHFi3nf -j REJECT --reject-with icmp-port-unreachable
+        ? ($IPT4, qr|-s\s(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/32)\s-p\s([a-z]+)\s.*--dport\s(\d+)\s|) 
+# -A INPUT -s 2407:500::2:b15b:efb2/128 -p tcp -m tcp --dport 22 -m comment --comment IPBANxkeivFHio5qdiIHFi3nf -j REJECT --reject-with icmp6-port-unreachable
+        : ($IPT6, qr|-s\s([a-f0-9:]+/128)\s-p\s([a-z]+)\s.*--dport\s(\d+)\s|);
 
-    # TODO IPv6 + cascade upstream
+    my @return;
+    for my $line (grep /$comstring/, qx($cmd -S INPUT)) {
+        chomp $line;
 
-    my %rules;
-    my $rulecount = 0;
-    for my $rule (qx($IPT4 -S INPUT | grep $rulestring)) {
-        my ($ip, $proto, $port, $action) =
-            $rule =~ m|-A INPUT -s (\d+\.\d+\.\d+\.\d+/32) -p (\w+) .* --dport (\d+) .* -j ([A-Z]+).*$|; 
+        my ($ip, $proto, $port) = $line =~ $rgx;
 
-        unless ($ip and $proto and $port and $action) {
-            $self->lcrit("Could not retrieve all values from iptables for $ruletype reconciliation: ip:$ip, proto:$proto, port:$port, action:$action");
+        unless ($ip and $proto and $port) {
+            $self->lwarn("Could not retrieve service details for $ipver rule :: '$line' :: ip:'$ip', proto:'$proto', port:'$port'");
             next;
         }
 
+        $self->linfo("Found $ipver: $ip, $proto, $port")
+            if $init;
+
+        push @return, [$ip, $proto, $port];
+    }
+
+    return @return;
+}
+
+sub __getblrules {
+    my ($self, $ipver) = @_;
+    return $self->__getrules($IPBANBLID, $ipver, 'blacklist');
+}
+
+sub __getdynrules {
+    my ($self, $ipver) = @_;
+    return $self->__getrules($IPBANID, $ipver, 'dynamic rules');
+}
+
+sub __getrules {
+    my ($self, $comstring, $ipver, $ruletype) = @_;
+
+    $self->ldebug("Retrieving netfilter rules: $ipver / $ruletype");
+
+    my %rules;
+    my $rulecount = 0;
+    for my $arr ($self->__getrulesdetails($ipver, $comstring)) {
+        my ($ip, $proto, $port) = @$arr;
+
+        # Manage doubled up rules here too..
         my $sid = "$proto:$port";
-        $rules{$sid}{$ip} = 1;
-        $rulecount++;
+        if ($rules{$sid}{$ip}) {
+            # doubled up
+            $self->lwarn("~~~ Removing: $ip, $sid, doubled up netfilter rule (will stay banned)");
+            __unban($ipver eq 'ip4' ? $IPT4 : $IPT6, $proto, $ip, $port, $comstring);
+        }
+        else {
+            # single
+            $rules{$sid}{$ip} = 1;
+            $rulecount++;
+        }
     }
 
     return \%rules, $rulecount;
