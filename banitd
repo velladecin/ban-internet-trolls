@@ -224,7 +224,7 @@ sub __init {
     my %blacklist;
     if (@services) {
         $logger->info("===================");
-        $logger->info("Starting daemon..");
+        #$logger->info("Starting daemon - BAN Internet Trolls");
         $logger->info(<<'EOF');
 BAN Internet Trolls
  _______      ____   ,---.   .--.-./`),---------.
@@ -238,8 +238,8 @@ BAN Internet Trolls
 /_______.'  '.(_,_).''--'    '--''---'    '---'
 
 EOF
-        $logger->info("Configured services");
         $logger->info("===================");
+        $logger->info("Configured services");
 
         for (my $count=0; $count<@services; $count++) {
             my $s = $services[$count];
