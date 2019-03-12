@@ -80,15 +80,16 @@ sub __init {
 
     # black/white listing
     for my $type (qw(whitelist4 whitelist6 blacklist4 blacklist6)) {
-        my @list = ();
+        my %iplist = ();
 
         if ($args{$type} and length $args{$type}) {
             # IPs
             $args{$type} =~ s/\s//g;
-            @list = split /,/, $args{$type};
+            # make sure IPs are unique - defend against user error
+            $iplist{$_} = 1 for split /,/, $args{$type};
         }
 
-        $self->{$type} = \@list;
+        $self->{$type} = [keys %iplist];
     }
 
 =head
