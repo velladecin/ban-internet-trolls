@@ -114,7 +114,6 @@ sub parse {
         if ($services) {
             $line =~ s/\s//g;
 
-
             # service header
             my $previousS = $service;
             if ($line =~ /^\s*\:[A-Za-z]+\:\s*$/) {
