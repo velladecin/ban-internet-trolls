@@ -73,21 +73,21 @@ sub __init {
     my $now = time();
     for my $ipver (qw(ip4 ip6)) {
         my %collection;
-        for my $arr ($self->__getrulesdetails($ipver, $IPBANID, 1)) {
-            my ($ip, $proto, $port) = @$arr;
+        my ($rules, $rulecount) = $self->__getdynrules($ipver);
+        $self->linfo("Reconciling dynamic $ipver: $rulecount rules,", scalar(keys %$rules), "sid on service start (config vs netfilter)");
 
-            # on startup we cannot say when the IP was banned,
-            # so.. just make it now
-            $collection {"$proto:$port"}{$ip} = {
-                start => $now,
-                lastseen => $now,
-            };
+        # on startup we cannot say when the IP was banned,
+        # so.. just make it now
+        for my $sid (keys %$rules) {
+            for my $ip (keys %{$rules->{$sid}}) {
+                $rules->{$sid}{$ip} = {
+                    start => $now,
+                    lastseen => $now,
+                };
+            }
         }
 
-        $self->linfo(uc($ipver). ": None")
-            unless keys %collection;
-
-        $self->{$ipver}{banned} = \%collection;
+        $self->{$ipver}{banned} = $rules;
     }
 }
 
