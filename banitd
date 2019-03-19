@@ -184,15 +184,25 @@ while (1) {
                 next;
             }
 
-            # exclude whitelisted IPs
-            if (grep /^${v}$/, $s->getwhitelist4(), $s->getwhitelist6()) {
-                $Ipban->linfo("Ignoring whitelisted IP: $v");
-                next;
+            # exclude whitelisted IPs,
+            # and ingest failed auth attempts
+            if ($k eq 'ip4') {
+                if ($s->in_whitelist4($v)) {
+                    $Ipban->linfo("Ignoring whitelisted IP: $v");
+                    next;
+                }
+
+                $Ipban->ingest4($v, $c, $s->getid());
             }
 
-            # ingest failed auth attempts
-            $Ipban->ingest4($v, $c, $s->getid()) if $k eq 'ip4';
-            $Ipban->ingest6($v, $c, $s->getid()) if $k eq 'ip6';
+            if ($k eq 'ip6') {
+                if ($s->in_whitelist6($v)) {
+                    $Ipban->linfo("Ignoring whitelisted IP: $v");
+                    next;
+                }
+
+                $Ipban->ingest6($v, $c, $s->getid());
+            }
         }
 
         # ban/unban
@@ -224,7 +234,6 @@ sub __init {
     my %blacklist;
     if (@services) {
         $logger->info("===================");
-        #$logger->info("Starting daemon - BAN Internet Trolls");
         $logger->info(<<'EOF');
 BAN Internet Trolls
  _______      ____   ,---.   .--.-./`),---------.

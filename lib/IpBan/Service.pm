@@ -1,6 +1,8 @@
 package IpBan::Service;
 use strict;
 use warnings;
+use Net::Patricia;
+use Data::Dumper;
 
 =head1 NAME
 
@@ -24,6 +26,11 @@ my %DEFAULT = (
     bantime => 300,         # seconds
     'bantime-grace' => 60,  # seconds
     banfilter => '5/60',    # 5 connection attempts withing 60 seconds
+);
+
+my %RGX = (
+    ip4addr => qr|^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?$|,
+    ip6addr => qr|^[a-fA-F0-9:]+(?:/\d{1,3})?$|, # TODO improve this
 );
 
 sub __init {
@@ -82,43 +89,66 @@ sub __init {
     for my $type (qw(whitelist4 whitelist6 blacklist4 blacklist6)) {
         my %iplist = ();
 
-        if ($args{$type} and length $args{$type}) {
-            # IPs
-            $args{$type} =~ s/\s//g;
-            # make sure IPs are unique - defend against user error
-            $iplist{$_} = 1 for split /,/, $args{$type};
+        # TODO XXX Separating white/black lists due to range introduction.
+        # Eventually they both will be done the same way.
+
+        # blacklist
+        if ($type =~ /^black/) {
+            if ($args{$type} and length $args{$type}) {
+                # IPs
+                $args{$type} =~ s/\s//g;
+                # make sure IPs are unique - defend against user error
+                $iplist{$_} = 1 for split /,/, $args{$type};
+            }
+
+            $self->{$type} = [keys %iplist];
+            next;
         }
 
-        $self->{$type} = [keys %iplist];
-    }
+        # whitelist
+        my ($rgx, $afinet) = $type =~ /4/
+            ? ($RGX{ip4addr}, AF_INET) : ($RGX{ip6addr}, AF_INET6);
 
-=head
-    if ($args{whitelist4} and length $args{whitelist4}) {
-        # IPs
-        $args{whitelist4} =~ s/\s//g;
-        @whitelist = split /,/, $args{whitelist4};
-    }
+        my $patty = Net::Patricia->new($afinet);
 
-    my @whitelist = ();
-    if ($args{whitelist} and length $args{whitelist}) {
-        # IPs
-        $args{whitelist} =~ s/\s//g;
-        @whitelist = split /,/, $args{whitelist};
-    }
-    $self->{whitelist} = \@whitelist;
+        if ($args{$type} and length $args{$type}) {
+            $args{$type} =~ s/\s//g;
 
-    # blacklisting
-    my @blacklist = ();
-    if ($args{blacklist} and length $args{blacklist}) {
-        # IPs
-        $args{blacklist} =~ s/\s//g;
-        @blacklist = split /,/, $args{blacklist};
+            for my $ip (split /,/, $args{$type}) {
+                unless ($ip =~ $rgx) {
+                    # TODO fix this to logfile
+                    print ">>> WARNING: invalid ip4 addr: $ip, skipping..\n";
+                    next;
+                }
+
+                # make IPs unique / defend against user error
+                $iplist{$ip} = 1
+            }
+        }
+
+        $patty->add_string($_, 1)
+            for keys %iplist;
+
+        $self->{$type}{raw} = [keys %iplist];
+        $self->{$type}{patricia} = $patty;
     }
-    $self->{blacklist} = \@blacklist;
-=cut
 
     1;
 }
+
+sub in_whitelist4 {
+    my ($self, $ip) = @_;
+    return $self->{whitelist4}{patricia}->match_string($ip);
+}
+
+sub in_whitelist6 {
+    my ($self, $ip) = @_;
+    return $self->{whitelist6}{patricia}->match_string($ip);
+}
+
+
+#
+# Getters
 
 sub getid           { return $_[0]->{proto}. ":" .$_[0]->{port} } # proto+port is unique
 sub getname         { return $_[0]->{name}      }
@@ -130,8 +160,8 @@ sub getbantimegrace { return $_[0]->{'bantime-grace'} }
 sub getbanfilter    { return $_[0]->{banfilter} }
 sub getauthlog      { return $_[0]->{authlog}   }
 sub getauthlogsearch { return $_[0]->{authlogsearch} }
-sub getwhitelist4   { return wantarray ? @{$_[0]->{whitelist4}} : $_[0]->{whitelist4} }
-sub getwhitelist6   { return wantarray ? @{$_[0]->{whitelist6}} : $_[0]->{whitelist6} }
+sub getwhitelist4   { return wantarray ? @{$_[0]->{whitelist4}{raw}} : $_[0]->{whitelist4}{raw} }
+sub getwhitelist6   { return wantarray ? @{$_[0]->{whitelist6}{raw}} : $_[0]->{whitelist6}{raw} }
 sub getblacklist4   { return wantarray ? @{$_[0]->{blacklist4}} : $_[0]->{blacklist4} }
 sub getblacklist6   { return wantarray ? @{$_[0]->{blacklist6}} : $_[0]->{blacklist6} }
 
