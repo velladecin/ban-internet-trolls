@@ -23,9 +23,9 @@ IpBan::Service - abstract class for a 'service'
 my %DEFAULT = (
     proto   => 'tcp',
     ipver   => 'ip4',
-    bantime => 300,         # seconds
-    'bantime-grace' => 60,  # seconds
-    banfilter => '5/60',    # 5 connection attempts withing 60 seconds
+    bantime => 1800,        # seconds
+    'bantime-grace' => 300, # seconds
+    banfilter => '4/900',   # 5 connection attempts withing 60 seconds
 );
 
 my %RGX = (
@@ -136,12 +136,12 @@ sub __init {
     1;
 }
 
-sub in_whitelist4 {
+sub inwhitelist4 {
     my ($self, $ip) = @_;
     return $self->{whitelist4}{patricia}->match_string($ip);
 }
 
-sub in_whitelist6 {
+sub inwhitelist6 {
     my ($self, $ip) = @_;
     return $self->{whitelist6}{patricia}->match_string($ip);
 }
