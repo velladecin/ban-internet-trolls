@@ -11,6 +11,8 @@ my $IPT6 = '/sbin/ip6tables';
 my $IPBANID = 'IPBANxkeivFHio5qdiIHFi3nf';
 my $IPBANBLID = 'IPBANblacklist';
 
+my @Ipver = qw(ip4 ip6);
+
 =head1 NAME
 
 IpBan - will ban IPs, via iptables
@@ -71,7 +73,7 @@ sub __init {
     $self->_blreconcile();
 
     my $now = time();
-    for my $ipver (qw(ip4 ip6)) {
+    for my $ipver (@Ipver) {
         my %collection;
         my ($rules, $rulecount) = $self->__getdynrules($ipver);
         $self->linfo("Reconciling dynamic $ipver: $rulecount rules,", scalar(keys %$rules), "sid on service start (config vs netfilter)");
@@ -330,7 +332,7 @@ sub reconcile {
     # reconcile blacklists
     $self->_blreconcile();
 
-    for my $ipv (qw(ip4 ip6)) {
+    for my $ipv (@Ipver) {
         my ($rules, $rulecount) = $self->__getdynrules($ipv);
         $self->ldebug("Reconciling $ipv: $rulecount rules,", scalar(keys %$rules), "sid");
 
@@ -425,7 +427,7 @@ sub _debug { return $_[0]->{log}->is_debug(); }
 sub _blreconcile {
     my $self = shift;
 
-    for my $ipver (qw(ip4 ip6)) {
+    for my $ipver (@Ipver) {
         my ($blrules, $blcount) = $self->__getblrules($ipver);
         $self->ldebug("Reconciling $ipver blacklist: $blcount rules,", scalar(keys %$blrules), "sid");
 
