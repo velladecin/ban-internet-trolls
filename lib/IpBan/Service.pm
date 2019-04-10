@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use Net::Patricia;
 use Data::Dumper;
+use NetAddr::IP;
 
 =head1 NAME
 
@@ -89,23 +90,14 @@ sub __init {
     for my $type (qw(whitelist4 whitelist6 blacklist4 blacklist6)) {
         my %iplist = ();
 
-        # TODO XXX Separating white/black lists due to range introduction.
-        # Eventually they both will be done the same way.
+        # As blacklists are input into iptables, they need to be handled differently.
+        # Also iptables do this:
+        # 1. translate 1.1.1.100/24 to 1.1.1.0/24
+        # 2. lowercase any IPv6
+        # 3. translate 0:0:0 to :: in IPv6
+        # so we need to make sure to do the same here to avoid trouble when reconciling existing
+        # and configured iptable rules..
 
-        # blacklist
-        if ($type =~ /^black/) {
-            if ($args{$type} and length $args{$type}) {
-                # IPs
-                $args{$type} =~ s/\s//g;
-                # make sure IPs are unique - defend against user error
-                $iplist{$_} = 1 for split /,/, $args{$type};
-            }
-
-            $self->{$type} = [keys %iplist];
-            next;
-        }
-
-        # whitelist
         my ($rgx, $afinet) = $type =~ /4/
             ? ($RGX{ip4addr}, AF_INET) : ($RGX{ip6addr}, AF_INET6);
 
@@ -122,10 +114,22 @@ sub __init {
                 }
 
                 # make IPs unique / defend against user error
-                $iplist{$ip} = 1
+
+                # whitelist
+                if ($type =~ /^white/) {
+                    $iplist{$ip} = 1;
+                    next;
+                }
+
+                # blacklist
+                my $netip = NetAddr::IP->new($ip);
+                $ip = lc $netip->network(); # network id + lc for IPv6
+                $iplist{$ip} = 1;
             }
         }
 
+        # TODO move this into the loop above
+        # TODO only whitelists really need this..
         $patty->add_string($_, 1)
             for keys %iplist;
 
@@ -162,8 +166,8 @@ sub getauthlog      { return $_[0]->{authlog}   }
 sub getauthlogsearch { return $_[0]->{authlogsearch} }
 sub getwhitelist4   { return wantarray ? @{$_[0]->{whitelist4}{raw}} : $_[0]->{whitelist4}{raw} }
 sub getwhitelist6   { return wantarray ? @{$_[0]->{whitelist6}{raw}} : $_[0]->{whitelist6}{raw} }
-sub getblacklist4   { return wantarray ? @{$_[0]->{blacklist4}} : $_[0]->{blacklist4} }
-sub getblacklist6   { return wantarray ? @{$_[0]->{blacklist6}} : $_[0]->{blacklist6} }
+sub getblacklist4   { return wantarray ? @{$_[0]->{blacklist4}{raw}} : $_[0]->{blacklist4}{raw} }
+sub getblacklist6   { return wantarray ? @{$_[0]->{blacklist6}{raw}} : $_[0]->{blacklist6}{raw} }
 
 
 #

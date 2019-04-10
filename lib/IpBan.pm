@@ -2,6 +2,7 @@ package IpBan;
 use strict;
 use warnings;
 use Data::Dumper;
+use NetAddr::IP;
 use FindBin;
 use lib "$FindBin::Bin/../lib";
 use Log;
@@ -69,8 +70,7 @@ sub new {
 sub __init {
     my $self = shift;
 
-    $self->linfo("Reconciling blacklists on service start (config vs netfilter)");
-    $self->_blreconcile();
+    $self->_blreconcile(1);
 
     my $now = time();
     for my $ipver (@Ipver) {
@@ -425,15 +425,18 @@ sub lsetdebug {
 sub _debug { return $_[0]->{log}->is_debug(); }
 
 sub _blreconcile {
-    my $self = shift;
+    my ($self, $init) = @_;
 
-    for my $ipver (@Ipver) {
+    IPver: for my $ipver (@Ipver) {
         my ($blrules, $blcount) = $self->__getblrules($ipver);
-        $self->ldebug("Reconciling $ipver blacklist: $blcount rules,", scalar(keys %$blrules), "sid");
+        my $lmsg = sprintf 'Reconciling blacklist %s: %d rules, %d sid',
+                    $ipver, $blcount, scalar(keys %$blrules);
 
-        my ($cmd, $subnet) = $ipver eq 'ip4'
-            ? ($IPT4, "/32")
-            : ($IPT6, "/128");
+        $init ? $self->linfo($lmsg. " on service start (config vs netfilter)")
+              : $self->ldebug($lmsg);
+
+        my ($cmd, $subnet, $afinet) = $ipver eq 'ip4'
+            ? ($IPT4, "/32") : ($IPT6, "/128");
 
         my $blbase = $self->{$ipver}{blacklist};
 
@@ -449,33 +452,55 @@ sub _blreconcile {
             }
 
             # nothing else to do here
-            next;
+            next IPver;
         }
 
-        # Go thru given blacklist and remove each from the current rules.
-        # Whatever is left needs to be removed, whatever is missing needs to be added.
+        # iptables change 1.1.1.100/24 to 1.1.1.0/24 and ip6tables change 0:0:0 to ::
+        # NetAddr::IP (see blacklist init processing) on the other hand returns 0:0:0 (ipv6).
+        # So we can never be sure that the string representation of IPs will actually match..
+        # Translate them to integers and compare those.
+
+        my %blbase_n = my %blrules_n = ();
 
         for my $sid (keys %$blbase) {
             my ($proto, $port) = split /:/, $sid;
 
             for my $ip (@{$blbase->{$sid}}) {
-                # be wary of refrences :)
-                my $ips = $ip . $subnet;
+                # add subnet only if it does not exist
+                my $ips = $ip =~ m|/\d+$| ? $ip : $ip . $subnet;
 
-                if ($blrules->{$sid} and $blrules->{$sid}{$ips}) {
-                    delete $blrules->{$sid}{$ips};
+                my $i = NetAddr::IP->new($ips)->numeric();
+                $blbase_n{$sid}{$i} = [ $cmd, $proto, $ips, $port, $IPBANBLID ];
+            }
+
+            for my $ips (keys %{$blrules->{$sid}}) { # these come with /subnets
+                my $i = NetAddr::IP->new($ips)->numeric();
+                $blrules_n{$sid}{$i} = [ $cmd, $proto, $ips, $port, $IPBANBLID ];
+            }
+        }
+
+        # Go thru given blacklist and remove each from the current rules.
+        # Whatever is left needs to be removed, whatever is missing needs to be added.
+
+        for my $sid (keys %blbase_n) {
+            for my $ip (keys %{$blbase_n{$sid}}) {
+                if ($blrules_n{$sid} and $blrules_n{$sid}{$ip}) {
+                    delete $blrules_n{$sid}{$ip};
                     next;
                 }
 
-                $self->linfo("!!! Banning: $ips, $sid (blacklisted)");
-                __ban($cmd, $proto, $ips, $port, $IPBANBLID)
+                # if not found then ban
+                my @dets = @{ $blbase_n{$sid}{$ip} };
+                $self->linfo("!!! Banning: $dets[2], $sid (blacklisted)");
+                __ban(@dets);
             }
 
-            # remove from blacklist whatever is left
-            if (keys %{$blrules->{$sid}}) {
-                for my $ip (keys %{$blrules->{$sid}}) {
-                    $self->linfo("*** UN-banning: $ip, $sid (previously blacklisted, but not present in current blacklist)");
-                    __unban($cmd, $proto, $ip, $port, $IPBANBLID);
+            # un-ban whatever is left
+            if (keys %{$blrules_n{$sid}}) {
+                for my $ip (keys %{$blrules_n{$sid}}) {
+                    my @dets = @{ $blrules_n{$sid}{$ip} };
+                    $self->linfo("*** UN-banning: $dets[2], $sid (previously defined in blacklist)");
+                    __unban(@dets);
                 }
             }
         }
@@ -496,9 +521,9 @@ sub __getrulesdetails {
 
     my ($cmd, $rgx) = $ipver eq 'ip4'
 # -A INPUT -s 95.85.12.206/32 -p tcp -m tcp --dport 22 -m comment --comment IPBANxkeivFHio5qdiIHFi3nf -j REJECT --reject-with icmp-port-unreachable
-        ? ($IPT4, qr|-s\s(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/32)\s-p\s([a-z]+)\s.*--dport\s(\d+)\s|) 
+        ? ($IPT4, qr|-s\s(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+)\s-p\s([a-z]+)\s.*--dport\s(\d+)\s|)
 # -A INPUT -s 2407:500::2:b15b:efb2/128 -p tcp -m tcp --dport 22 -m comment --comment IPBANxkeivFHio5qdiIHFi3nf -j REJECT --reject-with icmp6-port-unreachable
-        : ($IPT6, qr|-s\s([a-f0-9:]+/128)\s-p\s([a-z]+)\s.*--dport\s(\d+)\s|);
+        : ($IPT6, qr|-s\s([a-f0-9:]+/\d+)\s-p\s([a-z]+)\s.*--dport\s(\d+)\s|);
 
     my @return;
     for my $line (grep /$comstring/, qx($cmd -S INPUT)) {
