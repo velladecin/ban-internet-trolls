@@ -35,7 +35,8 @@ $SIG{HUP}  = \&huphandler;
 $SIG{USR1} = \&debugon;
 $SIG{USR2} = \&debugoff;
 sub killhandler {
-    $Ipban->linfo("Stopping daemon and exiting.. (caught: $!)");
+    my $catch = $! || "exit?";
+    $Ipban->linfo("Stopping daemon and exiting.. (caught: $catch)");
     exit 0;
 }
 sub huphandler {
