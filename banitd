@@ -140,16 +140,29 @@ while (1) {
 
                     for my $match (keys %{$authsearch->{match}}) {
                         if ($logline =~ /$match/) {
+                            my %ipset;
                             for my $ipver ($s->getipver()) {
                                 # in case ipver is not defined
                                 # within authsearch
                                 if ($authsearch->{match}{$match}{$ipver}) {
                                     my $rgxip = $authsearch->{match}{$match}{$ipver};
                                     my ($ip) = $logline =~ $rgxip;
-
-                                    $attempt{$ipver}{$ip}++;
+                                    if ($ip) {
+                                        $ipset{$ipver} = $ip;
+                                        last;
+                                    }
+                                    #$attempt{$ipver}{$ip}++;
                                 }
                             }
+
+                            unless (keys %ipset) {
+                                $Ipban->lwarn("Could not get ip from: $logline");
+                                last;
+                            }
+
+                            my $ipver = (keys %ipset)[0];
+                            my $ip = $ipset{$ipver};
+                            $attempt{$ipver}{$ip}++;
                         }
                     }
                 }
@@ -234,7 +247,8 @@ sub __init {
     # start/reload info logging
     my %blacklist;
     if (@services) {
-        $logger->info("===================");
+        my $doublebreak = "===================";
+        $logger->info($doublebreak);
         $logger->info(<<'EOF');
 BAN Internet Trolls
  _______      ____   ,---.   .--.-./`),---------.
@@ -247,12 +261,12 @@ BAN Internet Trolls
 |  (_,_)  /\ (_ o _) /  |    |  ||   |    (_I_)
 /_______.'  '.(_,_).''--'    '--''---'    '---'
 EOF
-        $logger->info("===================");
-        $logger->info("Configured services");
+        $logger->info($doublebreak);
+        $logger->info("Configured services:");
 
         for (my $count=0; $count<@services; $count++) {
             my $s = $services[$count];
-            $logger->info( sprintf 'Service: %s, Proto: %s, Port: %d', $s->getname(), $s->getproto(), $s->getport() );
+            $logger->info( sprintf '* Service: %s, Proto: %s, Port: %d', $s->getname(), $s->getproto(), $s->getport() );
             $logger->info( sprintf 'Banfilter: %s, Bantime: %ds, Bantime-grace: %ds', $s->getbanfilter(), $s->getbantime(), $s->getbantimegrace() );
 
             # whitelist
@@ -274,8 +288,8 @@ EOF
                 $blacklist{ip6}{$sid} = \@bl6;
             }
 
-            $logger->info("---")
-                if $count < (@services - 1);
+            $logger->info($doublebreak)
+                unless $count < (@services - 1);
         }
     }
 

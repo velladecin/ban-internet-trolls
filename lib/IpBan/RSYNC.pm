@@ -25,7 +25,7 @@ sub new {
     $args{authlogsearch} = \%AUTHLOG_SEARCH;
 
     my $self = bless {}, $class;
-    $self->SUPER::_init(%args);
+    $self->SUPER::__init(%args);
 
     return $self;
 }

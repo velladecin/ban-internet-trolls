@@ -161,7 +161,7 @@ sub __ingest {
     my $cbase = $self->{$ipver}{candidate};
 
     if (keys %$gbase && $gbase->{$sid}{$ip}) {
-        $self->linfo("Ingest & update grace cache for $ip");
+        $self->linfo("Ingest & update grace cache for $sid, $ip");
         $gbase->{$sid}{$ip}{lastseen} = $now;
     }
     elsif (keys %$bbase && $bbase->{$sid}{$ip}) {
@@ -272,7 +272,11 @@ sub enforce {
             # 1. if count satisfies banfilter (see config for details) then remove this candidate, move her/him to banned and physically ban them,
             #   check count irrespective of time, any candidate entry should never be more than banfilter time + read_authfile_frequency old
             if ($cbase->{$ip}{count} >= $maxcount) {
-                $self->linfo("!!! Banning: $ip, $sid, total count: ", $cbase->{$ip}{count});
+                #$self->linfo("!!! Banning: $ip, $sid, total count: ", $cbase->{$ip}{count});
+                $self->linfo(
+                    sprintf '!!! Banning: %s, %s(%s), total count: %d',
+                        $ip, $service->getname(), $sid, $cbase->{$ip}{count}
+                );
                 # add to banned
                 $self->{$ipver}{banned}{$sid}{$ip} = {
                     start => $now,
